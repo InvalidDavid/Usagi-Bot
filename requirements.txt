@@ -1,5 +1,6 @@
-py-cord==2.7.1
+py-cord
 python-dotenv
 aiohttp
 aiosqlite
 requests
+psutil
