@@ -1,6 +1,6 @@
 # Y-K-Bot
 
-A Py-cord bot for the Yuki / Kotatsu Discord server.
+A Py-cord bot for the Yuki / Yumemi / Kotatsu Discord server.
 
 ## Local Setup
 
