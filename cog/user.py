@@ -231,7 +231,7 @@ class User(commands.Cog):
             embed.add_field(name="📡 API Ping",
                             value=f"```ansi\n{ansi_blue}{api_ping if api_ping is not None else 'Fehler'} ms{ansi_reset}```",
                             inline=True)
-            embed.add_field(name="⚡ Command-Reaktiontime", value=f"```ansi\n{ansi_blue}{cmd_latency} ms{ansi_reset}```", inline=True)
+            embed.add_field(name="⚡ Command-Reactiontime", value=f"```ansi\n{ansi_blue}{cmd_latency} ms{ansi_reset}```", inline=True)
 
 
             embed.add_field(name="💻 CPU", value=f"```ansi\n{ansi_blue}{cpu_percent:.1f}%{ansi_reset}```",
