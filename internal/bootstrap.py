@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import asyncio
 from datetime import datetime
 
 import discord
@@ -11,6 +10,7 @@ from internal.utils.extensions import load_all_extensions
 
 class YKBot(commands.Bot):
     def __init__(self, settings: Settings):
+        self._ensure_event_loop()
         super().__init__(
             intents=discord.Intents.all(),
             debug_guilds=settings.guild_ids,
@@ -20,6 +20,13 @@ class YKBot(commands.Bot):
             help_command=None,
         )
         self.settings = settings
+
+    @staticmethod
+    def _ensure_event_loop() -> None:
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
 
 
 def _member_counts(bot: commands.Bot) -> tuple[int, int]:

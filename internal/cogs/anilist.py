@@ -1,13 +1,17 @@
-from __future__ import annotations
-
 from datetime import datetime
 
 import discord
 from discord.commands import Option, OptionChoice, slash_command
 from discord.ext import commands
 
-from internal.services.anilist import search_media
+from internal.services.anilist import AniListMediaType, autocomplete_media_titles, search_media
 from internal.utils.text import strip_html, truncate_words
+
+
+async def anilist_title_autocomplete(ctx: discord.AutocompleteContext) -> list[OptionChoice]:
+    media_type = ctx.options.get("media_type")
+    suggestions = await autocomplete_media_titles(ctx.value or "", media_type)
+    return [OptionChoice(item["label"], item["value"]) for item in suggestions]
 
 
 class AniListCog(commands.Cog):
@@ -18,12 +22,12 @@ class AniListCog(commands.Cog):
     async def search(
         self,
         ctx: discord.ApplicationContext,
-        media_type: Option(
+        media_type: Option(AniListMediaType, "Choose type"),
+        title: Option(
             str,
-            "Choose type",
-            choices=[OptionChoice("Anime", "ANIME"), OptionChoice("Manga", "MANGA")],
+            "Anime or Manga name",
+            autocomplete=anilist_title_autocomplete,
         ),
-        title: Option(str, "Anime or Manga name"),
     ):
         await ctx.defer()
         media = await search_media(title, media_type)

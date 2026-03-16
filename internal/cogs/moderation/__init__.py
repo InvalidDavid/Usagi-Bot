@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from .appeals import AppealCommands
 from .base import ModerationBase
 from .cases import CaseCommands

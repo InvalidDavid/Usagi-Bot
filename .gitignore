@@ -1,4 +1,7 @@
 __pycache__/
 *.py[cod]
+.venv/
+.python3.13/
 .env
 Data/
+for-references/

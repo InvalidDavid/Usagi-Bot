@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import discord
 from discord.commands import SlashCommandGroup
 from discord.ext import commands
