@@ -1609,8 +1609,7 @@ class ModC(commands.Cog):
 
         await thread.send(f"{thread.owner.mention}", embed=embed)
 
-    @commands.cooldown(2, 600, commands.BucketType.user)
-    @forum.command(description="Change a thread's tag (mod only, forum auto-selected)")
+    @forum.command(description="Change a thread's tag (2 use per post limit)")
     @is_mod_or_admin()
     async def change(
             self,
