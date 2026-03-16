@@ -1,7 +1,19 @@
 import discord
 from discord.ext import commands
-from discord.commands import slash_command
+from discord.commands import slash_command, SlashCommandGroup
 from discord.ui import View, Button, Select
+from discord.utils import format_dt
+from datetime import datetime, timezone, timedelta
+import psutil
+import platform
+import time
+
+ansi_blue = "\u001b[2;34m"
+ansi_reset = "\u001b[0m"
+
+
+
+# ---------------------------------------
 
 
 
@@ -119,10 +131,131 @@ def gather_commands_recursive(cmd, prefix=""):
     return cmds
 
 
+
+# ---------------------------------------
+
+
+
+
 class Help(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.MAX_FIELDS_PER_EMBED = 20
+        self.start_time = datetime.now(timezone.utc)
+
+    info = SlashCommandGroup("info", "Infos")
+
+
+
+    # ---------------------------------------
+
+
+
+    def format_timedelta(self, delta: timedelta) -> str:
+        days = delta.days
+        hours, remainder = divmod(delta.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"🗓️ {days}d ⏰ {hours}h ⏳ {minutes}m ⏲️ {seconds}s"
+
+    def time_ago(self, dt: datetime) -> str:
+        if dt is None:
+            return "Not available"
+        if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt
+        seconds = int(delta.total_seconds())
+
+        if seconds < 60:
+            return f"vor {seconds} seconds"
+        elif seconds < 3600:
+            return f"vor {seconds // 60} minutes"
+        elif seconds < 86400:
+            return f"vor {seconds // 3600} hours"
+        elif seconds < 2592000:
+            return f"vor {seconds // 86400} days"
+        elif seconds < 31536000:
+            return f"vor {seconds // 2592000} months"
+        else:
+            return f"vor {seconds // 31536000} years"
+
+
+    @info.command(name="bot", description="Detailed stats about the bot.")
+    async def bot_info(self, ctx: discord.ApplicationContext):
+        try:
+            await ctx.defer()
+
+            now = datetime.now(timezone.utc)
+            uptime = now - self.start_time
+            start = time.perf_counter()
+
+            python_version = platform.python_version()
+            discord_py_version = discord.__version__
+            system_info = f"{platform.system()} {platform.release()}"
+
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            ram_percent = psutil.virtual_memory().percent
+
+            created_at = self.bot.user.created_at if self.bot.user else None
+            created_str = "Not available" if not created_at else f"{format_dt(created_at, 'F')} ({format_dt(created_at, 'R')})"
+
+            ws_ping = round(self.bot.latency * 1000, 2)
+            cmd_latency = round((time.perf_counter() - start) * 1000, 2)
+
+            try:
+                await self.bot.http.request(discord.http.Route("GET", "/gateway"))
+                api_ping = round((time.perf_counter() - start) * 1000, 2)
+            except Exception:
+                api_ping = None
+
+            embed = discord.Embed(
+                title="🤖 Bot-Infos",
+                description="# [GitHub](https://github.com/InvalidDavid/Y-K-Bot)",
+                color=discord.Color.blurple(),
+                timestamp=now
+            )
+
+            embed.add_field(name="🆔 Bot ID",
+                            value=f"```ansi\n{ansi_blue}{self.bot.user.id if self.bot.user else 'N/A'}{ansi_reset}```",
+                            inline=True)
+            embed.add_field(name="📛 Bot Name", value=f"```ansi\n{ansi_blue}{self.bot.user}{ansi_reset}```", inline=True)
+
+            embed.add_field(name="📅 Bot created", value=f"{created_str}", inline=False)
+
+            embed.add_field(name="🕰️ Bot Uptime",
+                            value=(f"```ansi\n{ansi_blue}{self.format_timedelta(uptime)}{ansi_reset}```"
+                                   f"Letzter Neustart: {format_dt(self.start_time, 'F')} ({format_dt(self.start_time, 'R')})"),
+                            inline=False)
+
+            embed.add_field(name="🏓 WebSocket Ping", value=f"```ansi\n{ansi_blue}{ws_ping} ms{ansi_reset}```",
+                            inline=True)
+            embed.add_field(name="📡 API Ping",
+                            value=f"```ansi\n{ansi_blue}{api_ping if api_ping is not None else 'Fehler'} ms{ansi_reset}```",
+                            inline=True)
+            embed.add_field(name="⚡ Command-Reaktiontime", value=f"```ansi\n{ansi_blue}{cmd_latency} ms{ansi_reset}```", inline=True)
+
+
+            embed.add_field(name="💻 CPU", value=f"```ansi\n{ansi_blue}{cpu_percent:.1f}%{ansi_reset}```",
+                            inline=True)
+            embed.add_field(name="🧠 RAM", value=f"```ansi\n{ansi_blue}{ram_percent:.2f}%{ansi_reset}```",
+                            inline=True)
+            embed.add_field(name="🖥️ Platform", value=f"```ansi\n{ansi_blue}{system_info}{ansi_reset}```", inline=True)
+
+
+            embed.add_field(name="🐍 Python Version", value=f"```ansi\n{ansi_blue}{python_version}{ansi_reset}```",
+                            inline=True)
+            embed.add_field(name="📦 Py-cord Version", value=f"```ansi\n{ansi_blue}{discord_py_version}{ansi_reset}```",
+                            inline=True)
+
+            embed.set_footer(text=f"Requested from {ctx.author}", icon_url=ctx.author.display_avatar.url)
+            await ctx.respond(embed=embed)
+        except Exception as e:
+            await ctx.respond(f"Error: {e}", ephemeral=True)
+
+
+
+    # ---------------------------------------
+
+
 
     @slash_command(name="help", description="Show all Slash commands, that u as a User can use.")
     async def help_command(self, ctx: discord.ApplicationContext):
