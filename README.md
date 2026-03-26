@@ -21,14 +21,8 @@ The runtime entrypoint stays in `main.py`, while the implementation now lives in
 
 ```text
 .
-├── cog/                     # Thin extension wrappers for Discord cog loading
-├── internal/
-│   ├── cogs/                # Actual cog implementations
-│   │   └── moderation/      # Split moderation command domains
-│   ├── services/            # External API and persistence logic
-│   ├── utils/               # Shared helpers
-│   └── views/               # Discord UI views and modals
-├── main.py                  # Entry point
+├── cog/                   
+├── main.py
 └── requirements.txt
 ```
 
