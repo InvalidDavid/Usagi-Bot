@@ -2,8 +2,6 @@ import discord
 from discord.ext import commands
 from discord.commands import SlashCommandGroup, Option
 
-# ---------------- FORUM ----------------
-
 from dotenv import load_dotenv
 import os
 import re
@@ -14,13 +12,26 @@ FORUM_ID = int(os.getenv("FORUM_ID"))
 
 MOD_ROLE_IDS = [int(x) for x in os.getenv("MOD_ROLE_IDS", "").split(",") if x]
 ADMIN_ROLE_IDS = [int(x) for x in os.getenv("ADMIN_ROLE_IDS", "").split(",") if x]
+GUILD_IDS = [int(x) for x in os.getenv("GUILDS", "").split(",") if x]
 
-def is_mod_or_admin():
-    async def predicate(ctx: discord.ApplicationContext):
-        return any(r.id in MOD_ROLE_IDS + ADMIN_ROLE_IDS for r in ctx.author.roles)
-    return commands.check(predicate)
+
+async def check_permissions(ctx: discord.ApplicationContext):
+    if GUILD_IDS and ctx.guild_id not in GUILD_IDS:
+        await ctx.respond("This command can only be used in the configured server.", ephemeral=True)
+        return False
+
+    user_roles = [r.id for r in ctx.author.roles]
+    if not any(r in MOD_ROLE_IDS + ADMIN_ROLE_IDS for r in user_roles):
+        await ctx.respond("You need Mod or Admin role to use this command.", ephemeral=True)
+        return False
+
+    return True
+
 
 async def tag_autocomplete(ctx: discord.AutocompleteContext):
+    if GUILD_IDS and ctx.interaction.guild_id not in GUILD_IDS:
+        return []
+
     user_roles = [r.id for r in ctx.interaction.user.roles]
     if not any(r in MOD_ROLE_IDS + ADMIN_ROLE_IDS for r in user_roles):
         return []
@@ -36,7 +47,6 @@ async def tag_autocomplete(ctx: discord.AutocompleteContext):
     value = ctx.value.lower()
     return [t for t in all_tags if value in t.lower()][:25]
 
-# ---------------------------------------
 
 class ModC(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -44,10 +54,10 @@ class ModC(commands.Cog):
 
     forum = SlashCommandGroup("forum", "Forum management commands")
 
-    # ---------------------------------------
-
     @commands.Cog.listener()
     async def on_thread_create(self, thread: discord.Thread):
+        if GUILD_IDS and thread.guild.id not in GUILD_IDS:
+            return
         if not isinstance(thread, discord.Thread) or thread.parent_id != FORUM_ID:
             return
         try:
@@ -75,16 +85,19 @@ class ModC(commands.Cog):
         await thread.send(f"{thread.owner.mention}\n-# {M}", embed=embed)
 
     @forum.command(description="Change a thread's tag (2 use per post limit)")
-    @is_mod_or_admin()
     async def tag(
             self,
             ctx: discord.ApplicationContext,
             tag: Option(str, "Select a tag", autocomplete=tag_autocomplete)
     ):
+        if not await check_permissions(ctx):
+            return
+
         await ctx.defer(ephemeral=True)
 
         thread = ctx.channel
-        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel) or thread.parent_id != FORUM_ID:
+        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent,
+                                                                    discord.ForumChannel) or thread.parent_id != FORUM_ID:
             await ctx.respond("This command can only be used in the configured forum.", ephemeral=True)
             return
 
@@ -101,8 +114,10 @@ class ModC(commands.Cog):
         await ctx.respond(f"Thread tag set to: {tag_obj.name}", ephemeral=True)
 
     @forum.command(description="Close the thread (mod only)")
-    @is_mod_or_admin()
     async def close(self, ctx: discord.ApplicationContext):
+        if not await check_permissions(ctx):
+            return
+
         thread = ctx.channel
 
         if not isinstance(thread, discord.Thread) or thread.parent_id != FORUM_ID:
@@ -116,11 +131,13 @@ class ModC(commands.Cog):
         await thread.edit(archived=True, locked=True, name=f"🔒 {thread.name}")
 
     @forum.command(description="Unlock a thread (mod only)")
-    @is_mod_or_admin()
     async def unlock(
-        self,
-        ctx: discord.ApplicationContext
+            self,
+            ctx: discord.ApplicationContext
     ):
+        if not await check_permissions(ctx):
+            return
+
         thread = ctx.channel
         if not isinstance(thread, discord.Thread) or thread.parent_id != FORUM_ID:
             await ctx.respond("This command can only be used in the configured forum.", ephemeral=True)
@@ -130,6 +147,10 @@ class ModC(commands.Cog):
 
     @commands.command(name="close", description="Close and archive your thread (author only)")
     async def close(self, ctx):
+        if GUILD_IDS and ctx.guild.id not in GUILD_IDS:
+            await ctx.reply("This command can only be used in the configured server.")
+            return
+
         thread = ctx.channel
 
         if not isinstance(thread, discord.Thread) or thread.parent_id != FORUM_ID:
@@ -143,7 +164,6 @@ class ModC(commands.Cog):
         await ctx.reply("Thread closed and archived by author.")
         await thread.edit(locked=True, archived=True)
 
-    # ---------------------------------------
 
 def setup(bot: commands.Bot):
     bot.add_cog(ModC(bot))
