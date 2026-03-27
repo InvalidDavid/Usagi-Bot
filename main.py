@@ -3,9 +3,51 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 import datetime
+import discord.gateway
+from discord import Activity, ActivityType
+
+# ---------------- MOBILE STATUS ----------------
+#  added a monkey patching so i can get the mobile status on the bot
+# if you dont want that you can remove the function from marking
+original_identify = discord.gateway.DiscordWebSocket.identify
+
+async def patched_identify(self):
+    payload = {
+        'op': self.IDENTIFY,
+        'd': {
+            'token': self.token,
+            'properties': {
+                '$os': 'Android',
+                '$browser': 'Discord Android',
+                '$device': 'Android',
+                '$referrer': '',
+                '$referring_domain': ''
+            },
+            'compress': True,
+            'large_threshold': 250,
+            'v': 3
+        }
+    }
+
+    if hasattr(self, 'shard_id') and self.shard_id is not None:
+        payload['d']['shard'] = [self.shard_id, getattr(self, 'shard_count', 1)]
+
+    if hasattr(self, '_connection') and self._connection:
+        intents = getattr(self._connection, 'intents', None)
+        if intents:
+            payload['d']['intents'] = intents.value
+
+        presence = getattr(self._connection, '_presence', None)
+        if presence:
+            payload['d']['presence'] = presence
+
+    await self.send_as_json(payload)
+
+discord.gateway.DiscordWebSocket.identify = patched_identify
+
+# ---------------------------------------
 
 load_dotenv()
-
 
 bot = commands.Bot(
     intents=discord.Intents.all(),
@@ -50,24 +92,27 @@ async def on_ready():
         print(f"║ {line:<{width}} ║")
 
     print(f"╚{'═' * (width + 2)}╝\n")
-    activity = discord.Game(name=f"{users:,} users")
+
+    a1 = Activity(
+        type=ActivityType.custom,
+        name="we support Yumi"
+    )   # custom activity instead of saying "playing ..." it just say the text directly like a satus
+    a2 = discord.Game(name=f"{users:,} users")
     await bot.change_presence(
         status=discord.Status.online,
-        activity=activity
+        activity=a1
     )
-    print("\nBot successfully started\n")
 
-# -------------------------------------------------
+    print("\nBot successfully started.")
 
-@bot.slash_command(description="Force to load or reload all Slash commands")
+
+@bot.command(description="Force to load or reload all Slash commands")
 @commands.is_owner()
-@commands.cooldown(1, 10, commands.BucketType.user)
 async def sync(ctx):
     await bot.sync_commands(force=True)
     print(f"{datetime.datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
-    await ctx.respond("Slash-Commands are now synced, wait for a couple seconds before trying again!", ephemeral=True)
-
-# -------------------------------------------------
+    await ctx.reply("Slash-Commands are now synced, wait for a couple seconds before using a Slash Command!",
+                    ephemeral=True)
 
 
 if __name__ == "__main__":
