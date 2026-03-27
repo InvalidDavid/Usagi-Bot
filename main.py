@@ -95,7 +95,7 @@ async def on_ready():
 
     a1 = Activity(
         type=ActivityType.custom,
-        name="we support Yumi"
+        state="we support Yumi"
     )   # custom activity instead of saying "playing ..." it just say the text directly like a satus
     a2 = discord.Game(name=f"{users:,} users")
     await bot.change_presence(
