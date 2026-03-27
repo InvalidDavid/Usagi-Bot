@@ -61,8 +61,6 @@ async def send_error_webhook(ctx, error):
                 {"name": "Fingerprint", "value": f"`{fingerprint}`", "inline": False},
                 {"name": "Error Preview", "value": f"```py\n{tb_short.strip()}```", "inline": False},
             ],
-            "thumbnail": {
-                "url": getattr(user, "display_avatar", getattr(user, "avatar_url", None)).url if user else None}
         }
 
 
@@ -132,7 +130,7 @@ class ErrorHandler(commands.Cog):
     async def on_global_error(self, event_method, *args, **kwargs):
         exc_type, exc_value, exc_tb = sys.exc_info()
         if exc_value is None:
-            return 
+            return
 
         ctx = None
         for arg in args:
