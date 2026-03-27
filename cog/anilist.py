@@ -1,9 +1,4 @@
-import re
-import requests
-import discord
-from discord.ext import commands
-from discord.commands import slash_command, Option, OptionChoice
-from datetime import datetime
+from utils.imports import *
 
 
 class AniListCog(commands.Cog):
