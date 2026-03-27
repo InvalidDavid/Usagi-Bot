@@ -1,27 +1,10 @@
-import discord
-from discord.ext import commands
-from datetime import datetime, timedelta, timezone
-
-# ---------------------------------------
-
-import os
-import traceback
-from dotenv import load_dotenv
-import aiohttp
-import hashlib
-import asyncio
-import sys
+from utils.imports import *
 
 _error_cache = {}
-load_dotenv()
-
-E = "❌"
-SUPPORT_SERVER = "https://github.com/InvalidDavid/Y-K-Bot"
-
 
 async def send_error_webhook(ctx, error):
     now = datetime.now(timezone.utc)
-    webhook_url = os.getenv("WEBHOOK_URL")
+    webhook_url = WEBHOOK_URL
     if not webhook_url:
         print("Webhook URL not set in .env")
         return
