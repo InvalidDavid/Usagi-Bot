@@ -1,10 +1,4 @@
-import discord
-from discord.ext import commands
-import os
-from dotenv import load_dotenv
-import datetime
-import discord.gateway
-from discord import Activity, ActivityType
+from utils.imports import *
 
 # ---------------- MOBILE STATUS ----------------
 #  added a monkey patching so i can get the mobile status on the bot
@@ -47,13 +41,12 @@ discord.gateway.DiscordWebSocket.identify = patched_identify
 
 # ---------------------------------------
 
-load_dotenv()
 
 bot = commands.Bot(
     intents=discord.Intents.all(),
-    debug_guilds=[int(guild) for guild in os.getenv("GUILDS", "").split(",") if guild.strip()],
+    debug_guilds=GUILDS,
     sync_commands=True,
-    owner_ids=[int(user) for user in os.getenv("OWNER", "").split(",") if user.strip()],
+    owner_ids=OWNER,
     command_prefix="!",
     help_command=None
 )
@@ -96,7 +89,8 @@ async def on_ready():
     a1 = Activity(
         type=ActivityType.custom,
         state="we support Yumi"
-    )   # custom activity instead of saying "playing ..." it just say the text directly like a satus
+    )
+    # custom activity instead of saying "playing ..." it just say the text directly like a satus
     a2 = discord.Game(name=f"{users:,} users")
     await bot.change_presence(
         status=discord.Status.online,
@@ -111,8 +105,7 @@ async def on_ready():
 async def sync(ctx):
     await bot.sync_commands(force=True)
     print(f"{datetime.datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
-    await ctx.reply("Slash-Commands are now synced, wait for a couple seconds before using a Slash Command!",
-                    ephemeral=True)
+    await ctx.reply("Slash-Commands are now synced, wait for a couple seconds before using a Slash Command!")
 
 
 if __name__ == "__main__":
@@ -125,4 +118,4 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"[!] Error {cog}: {e}")
 
-    bot.run(os.getenv("TOKEN"))
+    bot.run(TOKEN)
