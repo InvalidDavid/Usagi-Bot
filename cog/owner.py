@@ -1,8 +1,5 @@
-import discord
-from discord.ext import commands
-from discord.commands import SlashCommandGroup
-import os
-import traceback
+from utils.imports import *
+
 
 COGS_FOLDER = "cog"
 
