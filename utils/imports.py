@@ -22,6 +22,7 @@ import sqlite3
 import random
 import traceback
 from io import BytesIO
+import io
 
 from discord import (
     ApplicationContext,
@@ -54,7 +55,8 @@ MOD_ROLE_IDS = [int(x) for x in os.getenv("MOD_ROLE_IDS", "").split(",") if x]
 ADMIN_ROLE_IDS = [int(x) for x in os.getenv("ADMIN_ROLE_IDS", "").split(",") if x]
 FORUM_ID = int(os.getenv("FORUM_ID"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-E = os.getenv("E")
+ERROREMOJI = os.getenv("E")
+ERRORCHANNEL = os.getenv("ERRORCHANNEL")
 SUPPORT_SERVER = os.getenv("SUPPORT_SERVER")
 
 __all__ = [
@@ -66,6 +68,6 @@ __all__ = [
     'ApplicationContext', 'ButtonStyle', 'Color', 'File', 'Interaction',
     'SeparatorSpacingSize', 'User', 'ActionRow', 'UIButton', 'Container',
     'DesignerView', 'MediaGallery', 'Section', 'Separator', 'TextDisplay',
-    'Thumbnail', 'button',
-    'TOKEN', 'OWNER', 'GUILDS', 'MOD_ROLE_IDS', 'ADMIN_ROLE_IDS', 'FORUM_ID', 'WEBHOOK_URL', 'E', 'SUPPORT_SERVER'
+    'Thumbnail', 'button', 'io',
+    'TOKEN', 'OWNER', 'GUILDS', 'MOD_ROLE_IDS', 'ADMIN_ROLE_IDS', 'FORUM_ID', 'WEBHOOK_URL', 'ERROREMOJI', 'SUPPORT_SERVER',
 ]
