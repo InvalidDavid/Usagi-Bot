@@ -95,7 +95,7 @@ class ErrorHandler(commands.Cog):
         embed = discord.Embed(
             color=discord.Color.red(),
             title=title,
-            description=f"{E} | {description}"
+            description=f"{ERROREMOJI} | {description}"
         )
 
         if isinstance(ctx, commands.Context):
@@ -155,6 +155,7 @@ class ErrorHandler(commands.Cog):
             commands.RoleNotFound: ("Not Found", "The role could not be found."),
             commands.EmojiNotFound: ("Not Found", "I could not find the emoji."),
             commands.PartialEmojiConversionFailure: ("Not Found", "This is not a valid emoji."),
+            commands.CommandNotFound: ("Not Found", "The command could not be found."),
         }
 
         if isinstance(error, commands.CommandOnCooldown):
@@ -176,7 +177,7 @@ class ErrorHandler(commands.Cog):
         embed = discord.Embed(
             color=discord.Color.red(),
             title="Command Error",
-            description=f"{E} | An unexpected error occurred!\nPlease report this issue on [Github]({SUPPORT_SERVER})."
+            description=f"{ERROREMOJI} | An unexpected error occurred!\nPlease report this issue on [Github]({SUPPORT_SERVER})."
         )
         embed.set_author(name=getattr(ctx, "author", getattr(ctx, "user", None)))
         embed.add_field(name="Error", value=f"```py\n{error}```")
@@ -216,7 +217,7 @@ class ErrorHandler(commands.Cog):
         embed = discord.Embed(
             color=discord.Color.red(),
             title="Command Error",
-            description=f"{E} | An unexpected error occurred!\nPlease report this issue on [Github]({SUPPORT_SERVER})."
+            description=f"{ERROREMOJI} | An unexpected error occurred!\nPlease report this issue on [Github]({SUPPORT_SERVER})."
         )
         embed.set_author(name=ctx.user)
         embed.add_field(name="Error", value=f"```py\n{error}```")
