@@ -216,7 +216,7 @@ class User(commands.Cog):
 
             embed.add_field(name="🕰️ Bot Uptime",
                             value=(f"```ansi\n{ansi_blue}{self.format_timedelta(uptime)}{ansi_reset}```"
-                                   f"Letzter Neustart: {format_dt(self.start_time, 'F')} ({format_dt(self.start_time, 'R')})"),
+                                   f"Last restart: {format_dt(self.start_time, 'F')} ({format_dt(self.start_time, 'R')})"),
                             inline=False)
 
             embed.add_field(name="🏓 WebSocket Ping", value=f"```ansi\n{ansi_blue}{ws_ping} ms{ansi_reset}```",
