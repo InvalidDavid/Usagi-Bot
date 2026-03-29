@@ -47,6 +47,8 @@ bot = commands.Bot(
     debug_guilds=GUILDS,
     sync_commands=True,
     owner_ids=OWNER,
+    command_prefix="!",
+    help_command=None,
 )
 
 
