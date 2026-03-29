@@ -642,7 +642,6 @@ class RPSInviteView(discord.ui.View):
         self.accepted = True
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(content=f"{self.opponent.mention} accepted the challenge!", view=self)
         self.stop()
 
     @discord.ui.button(label="Decline ❌", style=discord.ButtonStyle.danger)
@@ -653,7 +652,7 @@ class RPSInviteView(discord.ui.View):
         self.accepted = False
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(content=f"{self.opponent.mention} declined the challenge.", view=self)
+        await interaction.response.edit_message(content=f"{self.opponent.mention} declined the challenge.", view=None)
         self.stop()
 
 
@@ -730,15 +729,15 @@ class Games(commands.Cog):
 
         if invite_view.accepted is not True:
             if invite_view.accepted is False:
-                await invite_view.message.edit(content=f"❌ {opponent.mention} declined.", view=None)
+                return
             return
 
         play_view = RPSPlayView(ctx.author, opponent, self.bot.user, db=self.db)
-        await ctx.respond(
-            f"{opponent.mention} accepted!\n>>> {ctx.author.mention} starts, choose your option:",
+        await invite_view.message.edit(
+            content=f"{opponent.mention} accepted!\n>>> {ctx.author.mention} starts, choose your option:",
             view=play_view
         )
-        play_view.message = await ctx.interaction.original_response()
+        play_view.message = invite_view.message
 
     @games.command(name="tictactoe", description="Play TicTacToe in 3x3 or 5x5")
     async def tictactoe(
