@@ -47,8 +47,6 @@ bot = commands.Bot(
     debug_guilds=GUILDS,
     sync_commands=True,
     owner_ids=OWNER,
-    command_prefix="!",
-    help_command=None
 )
 
 
@@ -88,7 +86,7 @@ async def on_ready():
 
     a1 = Activity(
         type=ActivityType.custom,
-        state="we support Yumi"
+        state="sth new? check bio"
     )
     # custom activity instead of saying "playing ..." it just say the text directly like a satus
     a2 = discord.Game(name=f"{users:,} users")
@@ -104,7 +102,7 @@ async def on_ready():
 @commands.is_owner()
 async def sync(ctx):
     await bot.sync_commands(force=True)
-    print(f"{datetime.datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
+    print(f"{datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
     await ctx.reply("Slash-Commands are now synced, wait for a couple seconds before using a Slash Command!")
 
 
