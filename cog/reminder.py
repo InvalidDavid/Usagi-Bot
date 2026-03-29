@@ -364,9 +364,14 @@ class Reminder(commands.Cog):
             ))
 
             conn.commit()
-
+        am = discord.AllowedMentions(
+            everyone=False,
+            roles=False,
+            users=True
+        )
         return await ctx.respond(
-            f"✅ Reminder `#{display_number}` → <t:{run_at}:f>\n-# Reason: `{message}`"
+            f"✅ Reminder `#{display_number}` → <t:{run_at}:f>\n-# Reason: `{message}`",
+            allowed_mentions=am
         )
 
     @reminder.command(name="list")
@@ -396,6 +401,54 @@ class Reminder(commands.Cog):
         view.add_item(ReminderSelect(self, ctx.author.id, ctx.guild.id, reminders_with_numbers))
 
         return await ctx.respond(text, view=view, ephemeral=True)
+
+    @reminder.command(name="status", description="Reminder status")
+    @commands.is_owner()
+    async def status(self, ctx: discord.ApplicationContext):
+        worker_alive = self.worker_task and not self.worker_task.done()
+        scheduler_running = self.scheduler.running
+
+        with sqlite3.connect(DB_PATH) as conn:
+            pending = conn.execute("SELECT COUNT(*) FROM reminders WHERE status='pending'").fetchone()[0]
+
+        embed = discord.Embed(title="Reminder System Status",
+                              color=discord.Color.green() if worker_alive and scheduler_running else discord.Color.red())
+        embed.add_field(name="Worker Loop", value="✅ Running" if worker_alive else "❌ Not Running", inline=True)
+        embed.add_field(name="Scheduler", value="✅ Running" if scheduler_running else "❌ Not Running", inline=True)
+        embed.add_field(name="Pending Reminders", value=str(pending), inline=True)
+
+        await ctx.respond(embed=embed, ephemeral=True)
+
+    @reminder.command(name="test", description="Test reminder")
+    @commands.is_owner()
+    async def test(self, ctx: discord.ApplicationContext):
+        await ctx.defer(ephemeral=True)
+
+        run_at = int(time.time()) + 5
+        now = int(time.time())
+
+        with sqlite3.connect(DB_PATH) as conn:
+            display_number = get_next_display_number(conn, ctx.guild.id)
+            conn.execute("""
+                INSERT INTO reminders
+                (user_id, guild_id, channel_id, message, display_number, run_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                ctx.author.id,
+                ctx.guild.id,
+                ctx.channel.id,
+                "🧪 Test reminder",
+                display_number,
+                run_at,
+                now
+            ))
+            conn.commit()
+
+        await asyncio.sleep(1)
+
+        await ctx.respond(
+            f"✅ Test reminder created – you will receive it in a few seconds. Check that you see it appear in this channel.",
+            ephemeral=True)
 
     def cancel_reminder(self, user_id, guild_id, rid):
         with sqlite3.connect(DB_PATH) as conn:
@@ -459,7 +512,12 @@ class Reminder(commands.Cog):
                     channel = self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
                     user = await self.bot.fetch_user(uid)
 
-                    await channel.send(f"⏰ {user.mention} Reminder: `{msg}`")
+                    am = discord.AllowedMentions(
+                        everyone=False,
+                        roles=False,
+                        users=True
+                    )
+                    await channel.send(f"⏰ {user.mention} Reminder: `{msg}`", allowed_mentions=am)
 
                     sent_at = int(time.time())
                     diff = sent_at - run_at
