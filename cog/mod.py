@@ -133,7 +133,7 @@ class ModC(commands.Cog):
         await thread.edit(archived=False, locked=False)
         await ctx.respond(f"Thread '{thread.name}' unlocked.", ephemeral=True)
 
-    @commands.command(name="close", description="Close and archive your thread (author only)")
+    @slash_command(name="close", description="Close and archive your thread (author only)")
     async def close(self, ctx):
         if GUILD_IDS and ctx.guild.id not in GUILD_IDS:
             await ctx.reply("This command can only be used in the configured server.")
