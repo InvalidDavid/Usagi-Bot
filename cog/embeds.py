@@ -18,6 +18,7 @@ async def check_permissions(ctx: discord.ApplicationContext):
 
     return True
 
+# --- Database Setup ---
 def init_db():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -43,6 +44,7 @@ def init_db():
 init_db()
 
 
+# --- Database Helper ---
 class DatabaseHelper:
     @staticmethod
     def get_templates(guild_id: int) -> list:
@@ -96,6 +98,7 @@ class DatabaseHelper:
             return False
 
 
+# --- MODALS ---
 class EmbedTitleModal(discord.ui.Modal):
     def __init__(self, view):
         super().__init__(title="Edit Title")
@@ -214,6 +217,7 @@ class EmbedFieldRemoveModal(discord.ui.Modal):
             await interaction.response.send_message("❌ Please enter a number!", ephemeral=True)
 
 
+# --- CONFIRMATION VIEW ---
 class ConfirmDeleteView(discord.ui.View):
     def __init__(self, template_name: str, guild_id: int, parent_view, timeout: int = 30):
         super().__init__(timeout=timeout)
@@ -248,6 +252,7 @@ class ConfirmDeleteView(discord.ui.View):
         if interaction.guild.me.avatar:
             embed.set_thumbnail(url=interaction.guild.me.avatar.url)
 
+        # ✅ EINZIGE RESPONSE → ersetzt Confirm UI
         await interaction.response.edit_message(
             content=None,
             embed=embed,
@@ -289,6 +294,7 @@ class ConfirmDeleteView(discord.ui.View):
             pass
 
 
+# --- CHANNEL SELECT VIEW ---
 class ChannelSelectView(discord.ui.View):
     def __init__(self, embed: discord.Embed, timeout: int = 60):
         super().__init__(timeout=timeout)
@@ -308,19 +314,23 @@ class ChannelSelectView(discord.ui.View):
         try:
             await channel.send(embed=self.embed)
 
+            # ✅ Feedback (ephemeral)
             await interaction.response.send_message(
                 f"✅ Embed sent to {channel.mention}!",
                 ephemeral=True
             )
 
+            # ❗ RESET: neue frische View erstellen
             new_view = ChannelSelectView(self.embed, timeout=60)
 
+            # optional message tracking
             try:
                 msg = await interaction.original_response()
                 new_view.message = msg
             except:
                 pass
 
+            # ✅ ersetzt alte View → wieder klickbar
             try:
                 await interaction.message.edit(view=new_view)
             except:
@@ -366,6 +376,7 @@ class LoadTemplateView(discord.ui.View):
 
         self.clear_items()
 
+        # ── SELECT (Row 0) ──
         select = discord.ui.Select(
             placeholder=f"Select template (Page {self.current_page + 1})",
             options=options,
@@ -376,6 +387,7 @@ class LoadTemplateView(discord.ui.View):
         select.callback = self.select_callback
         self.add_item(select)
 
+        # ── EXIT BUTTON (Row 1) ──
         exit_btn = discord.ui.Button(
             label="❌ Exit",
             style=discord.ButtonStyle.secondary,
@@ -401,6 +413,7 @@ class LoadTemplateView(discord.ui.View):
         exit_btn.callback = exit_callback
         self.add_item(exit_btn)
 
+        # ── PAGINATION (Row 2) ──
         if len(self.templates) > self.items_per_page:
 
             if self.current_page > 0:
@@ -466,6 +479,7 @@ class LoadTemplateView(discord.ui.View):
             pass
 
 
+# --- EMBED EDITOR VIEW ---
 class EmbedEditorView(discord.ui.View):
     def __init__(self, embed: Optional[discord.Embed] = None, timeout: int = 300, template_name: str = None,
                  guild_id: int = None):
@@ -525,6 +539,7 @@ class EmbedEditorView(discord.ui.View):
             if it.guild.me.avatar:
                 embed.set_thumbnail(url=it.guild.me.avatar.url)
 
+            # ✅ WICHTIG: KEIN send_message → bestehende Message ersetzen
             await it.response.edit_message(
                 content=None,
                 embed=embed,
@@ -563,6 +578,7 @@ class EmbedEditorView(discord.ui.View):
         if interaction.guild.me.avatar:
             embed.set_thumbnail(url=interaction.guild.me.avatar.url)
 
+        # ✅ FIX: KEIN self.message.edit()
         await interaction.response.edit_message(
             content=None,
             embed=embed,
@@ -584,12 +600,14 @@ class EmbedEditorView(discord.ui.View):
             color=discord.Color.orange()
         )
 
+        # ✅ FIX: KEINE neue Message → ersetze aktuelle
         await interaction.response.edit_message(
             embed=embed,
             view=confirm_view
         )
 
 
+# --- DROPDOWN MENU ---
 class EmbedDropdown(discord.ui.Select):
     def __init__(self, view):
         options = [
@@ -635,6 +653,7 @@ class EmbedDropdown(discord.ui.Select):
             await self.view.update_message(interaction)
 
 
+# --- MAIN MENU VIEW ---
 class EmbedMainMenu(discord.ui.View):
     def __init__(self, guild_id: int, timeout: int = 120):
         super().__init__(timeout=timeout)
@@ -677,7 +696,8 @@ class EmbedMainMenu(discord.ui.View):
             view.message = interaction.message
 
 
-class EmbedCog(commands.Cog):
+# --- COG ---
+class Embeds(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
@@ -710,4 +730,4 @@ class EmbedCog(commands.Cog):
 
 
 def setup(bot):
-    bot.add_cog(EmbedCog(bot))
+    bot.add_cog(Embeds(bot))
