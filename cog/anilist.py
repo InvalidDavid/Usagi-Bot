@@ -1,7 +1,7 @@
 from utils.imports import *
 
 
-class AniListCog(commands.Cog):
+class AniList(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -152,4 +152,4 @@ class AniListCog(commands.Cog):
 
 
 def setup(bot):
-    bot.add_cog(AniListCog(bot))
+    bot.add_cog(AniList(bot))
