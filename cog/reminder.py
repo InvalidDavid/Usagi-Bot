@@ -253,6 +253,33 @@ class Reminder(commands.Cog):
         self.bot.loop.create_task(self._auto_start_worker())
         self.bot.loop.create_task(self._reclaim_stuck())
         self.bot.loop.create_task(self._start_scheduler_safe())
+        self.bot.loop.create_task(self._cleanup_orphan_users())
+
+    async def _cleanup_orphan_users(self):
+        await self.bot.wait_until_ready()
+
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute("""
+                SELECT DISTINCT user_id, guild_id FROM reminders
+            """).fetchall()
+
+            removed = 0
+
+            for user_id, guild_id in rows:
+                guild = self.bot.get_guild(guild_id)
+                if not guild:
+                    continue
+
+                member = guild.get_member(user_id)
+                if member is None:
+                    conn.execute("""
+                        DELETE FROM reminders
+                        WHERE user_id=? AND guild_id=?
+                    """, (user_id, guild_id))
+                    removed += 1
+
+            conn.commit()
+
 
     async def _start_scheduler_safe(self):
         await self.bot.wait_until_ready()
@@ -333,7 +360,7 @@ class Reminder(commands.Cog):
 
     reminder = discord.SlashCommandGroup("reminder", "Remind system")
 
-    @reminder.command(name="create")
+    @reminder.command(name="create", description="Create a new reminder")
     async def create(self, ctx: discord.ApplicationContext, duration: str, message: str):
         target = parse_time(duration)
         if not target:
@@ -374,7 +401,7 @@ class Reminder(commands.Cog):
             allowed_mentions=am
         )
 
-    @reminder.command(name="list")
+    @reminder.command(name="list", description="List reminders")
     async def list(self, ctx: discord.ApplicationContext):
         with sqlite3.connect(DB_PATH) as conn:
             rows = conn.execute("""
@@ -568,6 +595,20 @@ class Reminder(commands.Cog):
             except Exception:
                 await asyncio.sleep(5)
 
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("""
+                    DELETE FROM reminders
+                    WHERE user_id=? AND guild_id=?
+                """, (member.id, member.guild.id))
+                conn.commit()
+
+            print(f"🗑️ Removed reminders for user {member.id} in guild {member.guild.id}")
+
+        except Exception as e:
+            print(f"❌ Failed to cleanup user reminders: {e}")
 
 def setup(bot):
     bot.add_cog(Reminder(bot))
