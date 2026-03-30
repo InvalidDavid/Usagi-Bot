@@ -103,101 +103,38 @@ class Autolink(commands.Cog):
 
         content = message.content
 
-        ig_reel = INSTAGRAM_REEL_PATTERN.search(content)
-        if ig_reel:
-            original_url = ig_reel.group(0)
-            mirror_url = f"{ig_reel.group(1)}kkinstagram.com{ig_reel.group(2)}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
+        patterns = [
+            (INSTAGRAM_REEL_PATTERN, lambda m: f"{m.group(1)}kkinstagram.com{m.group(2)}"),
+            (INSTAGRAM_VIDEO_PATTERN, lambda m: f"{m.group(1)}kkinstagram.com{m.group(2)}"),
+            (INSTAGRAM_PHOTO_PATTERN, lambda m: f"{m.group(1)}kkinstagram.com{m.group(2)}"),
+            (YOUTUBE_VIDEO_PATTERN, lambda m: f"https://koutube.com/watch?v={m.group(2)}"),
+            (YOUTUBE_SHORTS_PATTERN, lambda m: f"https://koutube.com/watch?v={m.group(2)}"),
+            (YOUTUBE_SHORT_PATTERN, lambda m: f"https://koutube.com/watch?v={m.group(2)}"),
+            (TIKTOK_PATTERN, lambda m: f"https://vxtiktok.com/video/{m.group(2)}"),
+            (REDDIT_POST_PATTERN, lambda m: f"https://rxddit.com/comments/{m.group(2)}"),
+            (REDDIT_SHORT_PATTERN, lambda m: f"https://rxddit.com/comments/{m.group(2)}"),
+            (FACEBOOK_VIDEO_PATTERN, lambda m: f"https://facebed.com/watch?v={m.group(2)}"),
+            (FACEBOOK_REEL_PATTERN, lambda m: f"https://facebed.com/watch?v={m.group(2)}"),
+        ]
 
-        ig_video = INSTAGRAM_VIDEO_PATTERN.search(content)
-        if ig_video:
-            original_url = ig_video.group(0)
-            mirror_url = f"{ig_video.group(1)}kkinstagram.com{ig_video.group(2)}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
+        for pattern, builder in patterns:
+            match = pattern.search(content)
+            if match:
+                original_url = match.group(0)
+                mirror_url = builder(match)
 
-        ig_photo = INSTAGRAM_PHOTO_PATTERN.search(content)
-        if ig_photo:
-            original_url = ig_photo.group(0)
-            mirror_url = f"{ig_photo.group(1)}kkinstagram.com{ig_photo.group(2)}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
+                await self._send_mirror(message, mirror_url, original_url)
 
-        yt_video = YOUTUBE_VIDEO_PATTERN.search(content)
-        if yt_video:
-            original_url = yt_video.group(0)
-            video_id = yt_video.group(2)
-            mirror_url = f"https://koutube.com/watch?v={video_id}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
+                try:
+                    await message.edit(suppress=True)
+                except discord.Forbidden:
+                    print(f"Missing 'manage_messages' permission to edit {message.author.name}'s message")
+                except discord.HTTPException as e:
+                    print(f"Failed to suppress embed: {e}")
+                except Exception as e:
+                    print(f"Unexpected error while suppressing embed: {e}")
 
-        yt_shorts = YOUTUBE_SHORTS_PATTERN.search(content)
-        if yt_shorts:
-            original_url = yt_shorts.group(0)
-            video_id = yt_shorts.group(2)
-            mirror_url = f"https://koutube.com/watch?v={video_id}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
-
-        yt_short = YOUTUBE_SHORT_PATTERN.search(content)
-        if yt_short:
-            original_url = yt_short.group(0)
-            video_id = yt_short.group(2)
-            mirror_url = f"https://koutube.com/watch?v={video_id}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
-
-        tiktok = TIKTOK_PATTERN.search(content)
-        if tiktok:
-            original_url = tiktok.group(0)
-            video_id = tiktok.group(2)
-            mirror_url = f"https://vxtiktok.com/video/{video_id}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
-
-        reddit = REDDIT_POST_PATTERN.search(content)
-        if reddit:
-            original_url = reddit.group(0)
-            post_id = reddit.group(2)
-            mirror_url = f"https://rxddit.com/comments/{post_id}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
-
-        reddit_short = REDDIT_SHORT_PATTERN.search(content)
-        if reddit_short:
-            original_url = reddit_short.group(0)
-            post_id = reddit_short.group(2)
-            mirror_url = f"https://rxddit.com/comments/{post_id}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
-
-        fb_video = FACEBOOK_VIDEO_PATTERN.search(content)
-        if fb_video:
-            original_url = fb_video.group(0)
-            video_id = fb_video.group(2)
-            mirror_url = f"https://facebed.com/watch?v={video_id}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
-
-        fb_reel = FACEBOOK_REEL_PATTERN.search(content)
-        if fb_reel:
-            original_url = fb_reel.group(0)
-            video_id = fb_reel.group(2)
-            mirror_url = f"https://facebed.com/watch?v={video_id}"
-            await self._send_mirror(message, mirror_url, original_url)
-            await message.edit(suppress=True)
-            return
+                return
 
 def setup(bot: commands.Bot) -> None:
     bot.add_cog(Autolink(bot))
