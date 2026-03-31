@@ -40,6 +40,48 @@ class ModC(commands.Cog):
         self.bot = bot
 
     mod = SlashCommandGroup("mod", "Mod commands")
+    forum = SlashCommandGroup("forum", "Forum management commands")
+
+    @commands.Cog.listener()
+    async def on_thread_create(self, thread: discord.Thread):
+        if GUILD_IDS and thread.guild.id not in GUILD_IDS:
+            return
+
+        if thread.parent_id != FORUM_ID:
+            return
+
+        pin_notice = None
+
+        try:
+            starter_msg = await thread.fetch_message(thread.id)
+            await starter_msg.pin()
+        except discord.Forbidden:
+            pin_notice = "Couldn't pin starter message, missing permissions."
+        except discord.NotFound:
+            pin_notice = "Couldn't find the starter message to pin."
+        except discord.HTTPException:
+            pin_notice = "Couldn't pin the starter message due to a Discord API error."
+
+        embed = discord.Embed(
+            title="Support Channel",
+            description=(
+                "Rules for asking for support:\n"
+                "- Provide as much details as you can about the issue. "
+                "(For example a step-by-step way on how to encounter that issue)\n"
+                "- Screenshots or screen recordings can help us understand the issue better, "
+                "so it's recommended you send at least one in your post.\n"
+                "- Check <#1488492402623905913>."
+            ),
+            color=discord.Color.blurple()
+        )
+        embed.set_footer(text="You can use !close to close your post.")
+
+        content = thread.owner.mention
+        if pin_notice:
+            content += f"\n-# {pin_notice}"
+
+        await thread.send(content=content, embed=embed)
+
 
     @mod.command(name="purge", description="Clear messages")
     @commands.guild_only()
@@ -138,39 +180,6 @@ class ModC(commands.Cog):
                 ephemeral=True
             )
 
-
-
-    forum = SlashCommandGroup("forum", "Forum management commands")
-
-    @commands.Cog.listener()
-    async def on_thread_create(self, thread: discord.Thread):
-        if GUILD_IDS and thread.guild.id not in GUILD_IDS:
-            return
-        if not isinstance(thread, discord.Thread) or thread.parent_id != FORUM_ID:
-            return
-        try:
-            starter_msg = await thread.fetch_message(thread.id)
-            M = None
-            await starter_msg.pin()
-        except Exception as e:
-            M = "Couldn't pin starter message, no permissions for that."
-            pass
-
-        embed = discord.Embed(
-            title="Support Channel",
-            description=
-            """
-            Rules for asking for support:
-            - Provide as much details as you can about the issue. (For example a step-by-step way on how to encounter that issue)
-            - Screenshots or screen recordings can help us understand the issue better, so it's recommended you send at least one in your post.
-            - Check <#1488492402623905913>..
-            """
-            ,
-            color=discord.Color.blurple()
-        )
-        embed.set_footer(text="You can use !close to close your post.")
-
-        await thread.send(f"{thread.owner.mention}\n-# {M}", embed=embed)
 
     @forum.command(description="Change a thread's tag (2 use per post limit)")
     async def tag(
