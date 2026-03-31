@@ -1,6 +1,7 @@
-# Y-K-Bot
+# Manga-Bot
 
-A Py-cord bot for the Yuki / Yumemi / Kotatsu Discord server.
+A Py-cord bot for the Mabga Discord server.
+-# Some features works only on one server.
 
 ## Local Setup
 
