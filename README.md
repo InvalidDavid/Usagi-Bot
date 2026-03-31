@@ -1,7 +1,8 @@
 # Manga-Bot
 
 A Py-cord bot for the Mabga Discord server.
--# Some features works only on one server.
+
+### Some features works only on one server.
 
 ## Local Setup
 
