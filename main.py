@@ -1,8 +1,39 @@
 from utils.imports import *
+from utils.secrets import GUILDS_ID, OWNER, TOKEN
+
+# ---------------- LOGGING ----------------
+logger = logging.getLogger("bot")
+logger.setLevel(logging.INFO)
+
+formatter = logging.Formatter(
+    "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+
+file_handler = logging.FileHandler("utils/error/bot.log", encoding="utf-8")
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(formatter)
+
+if not logger.handlers:
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
+discord_logger = logging.getLogger("discord")
+discord_logger.setLevel(logging.INFO)
+
+if not discord_logger.handlers:
+    discord_logger.addHandler(console_handler)
+    discord_logger.addHandler(file_handler)
+# -----------------------------------------
+
 
 # ---------------- MOBILE STATUS ----------------
-#  added a monkey patching so i can get the mobile status on the bot
-# if you dont want that you can remove the function from marking
+#  added a monkey patching, so I can get the mobile status on the bot
+# if you don't want that you can remove the function from marking
 original_identify = discord.gateway.DiscordWebSocket.identify
 
 async def patched_identify(self):
@@ -44,7 +75,7 @@ discord.gateway.DiscordWebSocket.identify = patched_identify
 
 bot = commands.Bot(
     intents=discord.Intents.all(),
-    debug_guilds=GUILDS,
+    debug_guilds=GUILDS_ID,
     sync_commands=True,
     owner_ids=OWNER,
     command_prefix="!",
@@ -80,31 +111,31 @@ async def on_ready():
     ]
 
     width = max(len(i) for i in infos)
-    print(f"╔{'═' * (width + 2)}╗")
+    logger.info(f"╔{'═' * (width + 2)}╗")
     for line in infos:
-        print(f"║ {line:<{width}} ║")
+        logger.info(f"║ {line:<{width}} ║")
 
-    print(f"╚{'═' * (width + 2)}╝\n")
+    logger.info(f"╚{'═' * (width + 2)}╝\n")
 
     a1 = Activity(
         type=ActivityType.custom,
         state="sth new? check bio"
     )
-    # custom activity instead of saying "playing ..." it just say the text directly like a satus
+    # custom activity instead of saying "playing ..." it just says the text directly like a satus
     a2 = discord.Game(name=f"{users:,} users")
     await bot.change_presence(
         status=discord.Status.online,
         activity=a1
     )
 
-    print("\nBot successfully started.")
+    logger.info("\nBot successfully started.")
 
 
 @bot.command(description="Force to load or reload all Slash commands")
 @commands.is_owner()
 async def sync(ctx):
     await bot.sync_commands(force=True)
-    print(f"{datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
+    logger.info(f"{datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
     await ctx.reply("Slash-Commands are now synced, wait for a couple seconds before using a Slash Command!")
 
 
@@ -114,8 +145,8 @@ if __name__ == "__main__":
             cog = f"cog.{filename[:-3]}"
             try:
                 bot.load_extension(cog)
-                print(f"[+] Loaded: {cog}")
-            except Exception as e:
-                print(f"[!] Error {cog}: {e}")
+                logger.info(f"[+] Loaded: {cog}")
+            except Exception:
+                logger.exception(f"[!] Error {cog}")
 
     bot.run(TOKEN)
