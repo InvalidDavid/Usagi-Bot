@@ -136,7 +136,7 @@ class User(commands.Cog):
         self.MAX_FIELDS_PER_EMBED = 20
         self.start_time = datetime.now(timezone.utc)
 
-    info = SlashCommandGroup("info", "Infos")
+    # info = SlashCommandGroup("info", "Infos")
 
 
 
@@ -172,8 +172,8 @@ class User(commands.Cog):
             return f"vor {seconds // 31536000} years"
 
 
-    @info.command(name="bot", description="Detailed stats about the bot.")
-    async def bot_info(self, ctx: discord.ApplicationContext):
+    @slash_command(name="about", description="Detailed stats about the bot.")
+    async def about(self, ctx: discord.ApplicationContext):
         try:
             await ctx.defer()
 
