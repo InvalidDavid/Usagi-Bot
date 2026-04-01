@@ -1,11 +1,8 @@
 from utils.imports import *
-from datetime import timezone
-
-GUILD_IDS = GUILDS
-
+from utils.secrets import GUILDS_ID, MOD_ROLE_IDS, ADMIN_ROLE_IDS, FORUM_ID
 
 async def check_permissions(ctx: discord.ApplicationContext):
-    if GUILD_IDS and ctx.guild_id not in GUILD_IDS:
+    if GUILDS_ID and ctx.guild_id not in GUILDS_ID:
         return False, "This command can only be used in the configured server."
 
     user_roles = [r.id for r in ctx.author.roles]
@@ -16,7 +13,7 @@ async def check_permissions(ctx: discord.ApplicationContext):
 
 
 async def tag_autocomplete(ctx: discord.AutocompleteContext):
-    if GUILD_IDS and ctx.interaction.guild_id not in GUILD_IDS:
+    if GUILDS_ID and ctx.interaction.guild_id not in GUILDS_ID:
         return []
 
     user_roles = [r.id for r in ctx.interaction.user.roles]
@@ -44,7 +41,7 @@ class ModC(commands.Cog):
 
     @commands.Cog.listener()
     async def on_thread_create(self, thread: discord.Thread):
-        if GUILD_IDS and thread.guild.id not in GUILD_IDS:
+        if GUILDS_ID and thread.guild.id not in GUILDS_ID:
             return
 
         if thread.parent_id != FORUM_ID:
@@ -242,9 +239,9 @@ class ModC(commands.Cog):
         await thread.edit(archived=False, locked=False)
         await ctx.respond(f"Thread '{thread.name}' unlocked.", ephemeral=True)
 
-    @slash_command(name="close", description="Close and archive your thread (author only)")
+    @commands.command(name="close", description="Close and archive your thread (author only)")
     async def close(self, ctx):
-        if GUILD_IDS and ctx.guild.id not in GUILD_IDS:
+        if GUILDS_ID and ctx.guild.id not in GUILDS_ID:
             await ctx.reply("This command can only be used in the configured server.")
             return
 
