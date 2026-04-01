@@ -2,8 +2,11 @@ from utils.imports import *
 from utils.secrets import GUILDS_ID, OWNER, TOKEN
 
 # ---------------- LOGGING ----------------
+os.makedirs("utils/error", exist_ok=True)
+
 logger = logging.getLogger("bot")
 logger.setLevel(logging.INFO)
+logger.propagate = False
 
 formatter = logging.Formatter(
     "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
@@ -14,20 +17,39 @@ console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 
-file_handler = logging.FileHandler("utils/error/bot.log", encoding="utf-8")
+# reset every restart
+file_handler = logging.FileHandler(
+    "utils/error/bot.log",
+    mode="w",
+    encoding="utf-8"
+)
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
+
+# create only if an actual error happens
+error_filename = f"utils/error/crash_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+error_handler = logging.FileHandler(
+    error_filename,
+    mode="w",
+    encoding="utf-8",
+    delay=True
+)
+error_handler.setLevel(logging.ERROR)
+error_handler.setFormatter(formatter)
 
 if not logger.handlers:
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
+    logger.addHandler(error_handler)
 
 discord_logger = logging.getLogger("discord")
 discord_logger.setLevel(logging.INFO)
+discord_logger.propagate = False
 
 if not discord_logger.handlers:
     discord_logger.addHandler(console_handler)
     discord_logger.addHandler(file_handler)
+    discord_logger.addHandler(error_handler)
 # -----------------------------------------
 
 
@@ -78,7 +100,7 @@ bot = commands.Bot(
     debug_guilds=GUILDS_ID,
     sync_commands=True,
     owner_ids=OWNER,
-    command_prefix="!",
+    command_prefix="=",
     help_command=None,
 )
 
@@ -128,7 +150,7 @@ async def on_ready():
         activity=a1
     )
 
-    logger.info("\nBot successfully started.")
+    logger.info("Bot successfully started.")
 
 
 @bot.command(description="Force to load or reload all Slash commands")
