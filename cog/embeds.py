@@ -1,14 +1,12 @@
-import json
-from typing import Optional
 from utils.imports import *
+from utils.secrets import GUILDS_ID, MOD_ROLE_IDS, ADMIN_ROLE_IDS
 
 DB_PATH = "Data/embeds.db"
 
-GUILD_IDS = GUILDS
-
+# AUTOSAVE IS BROKEN AND WHOLE CODE WILL BE UPDATE IN THE FUTURE TO v2 components
 
 async def check_permissions(ctx: discord.ApplicationContext):
-    if GUILD_IDS and ctx.guild_id not in GUILD_IDS:
+    if GUILDS_ID and ctx.guild_id not in GUILDS_ID:
         await ctx.respond("This command can only be used in the configured server.", ephemeral=True)
         return False
 
