@@ -3,6 +3,7 @@
 A Py-cord bot for the Mabga Discord server.
 
 ### Some features works only on one server.
+first time using rly README.md so gonna update that one in the feature better.
 
 ## Local Setup
 
