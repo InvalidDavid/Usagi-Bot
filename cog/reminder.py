@@ -702,7 +702,6 @@ class Reminder(commands.Cog):
                                 allowed_mentions=am
                             )
                             delivered = True
-                            logger.info("Sent reminder #%s in channel", display_num)
 
                         except Exception as channel_error:
                             logger.warning(
