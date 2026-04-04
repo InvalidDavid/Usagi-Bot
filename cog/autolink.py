@@ -36,12 +36,17 @@ TIKTOK_PATTERN = re.compile(
 )
 
 REDDIT_POST_PATTERN = re.compile(
-    r'(https?://)(?:www\.)?reddit\.com/r/[\w\d_]+/comments/([a-z0-9]+)',
+    r'(https?://)(?:www\.|old\.)?reddit\.com/(?:r/[\w\d_]+/)?comments/([a-z0-9]+)(?:/[^\s?#]*)?',
     re.IGNORECASE
 )
 
 REDDIT_SHORT_PATTERN = re.compile(
     r'(https?://)redd\.it/([a-z0-9]+)',
+    re.IGNORECASE
+)
+
+REDDIT_SHARE_PATTERN = re.compile(
+    r'(https?://)(?:www\.|old\.)?reddit\.com/s/([a-zA-Z0-9]+)',
     re.IGNORECASE
 )
 
@@ -57,6 +62,11 @@ FACEBOOK_REEL_PATTERN = re.compile(
 
 FACEBOOK_SHARE_REEL_PATTERN = re.compile(
     r'(https?://)(?:www\.)?facebook\.com/share/r/([a-zA-Z0-9_-]+)/?',
+    re.IGNORECASE
+)
+
+FACEBOOK_SHARE_GENERIC_PATTERN = re.compile(
+    r'(https?://)(?:www\.|m\.)?facebook\.com/share/(\d+)(?:[/?][^\s]*)?',
     re.IGNORECASE
 )
 
@@ -118,10 +128,12 @@ class Autolink(commands.Cog):
             (TIKTOK_PATTERN, lambda m: f"https://vxtiktok.com/video/{m.group(2)}"),
             (REDDIT_POST_PATTERN, lambda m: f"https://rxddit.com/comments/{m.group(2)}"),
             (REDDIT_SHORT_PATTERN, lambda m: f"https://rxddit.com/comments/{m.group(2)}"),
+            (REDDIT_SHARE_PATTERN, lambda m: f"https://rxddit.com/s/{m.group(2)}"),
             (FACEBOOK_VIDEO_PATTERN, lambda m: f"https://www.facebed.com/watch?v={m.group(2)}"),
             (FACEBOOK_REEL_PATTERN, lambda m: f"https://www.facebed.com/share/r/{m.group(2)}"),
             (FACEBOOK_WATCH_PATTERN, lambda m: f"https://www.facebed.com/watch?v={m.group(2)}"),
             (FACEBOOK_SHARE_REEL_PATTERN, lambda m: f"https://www.facebed.com/share/r/{m.group(2)}"),
+            (FACEBOOK_SHARE_GENERIC_PATTERN, lambda m: f"https://www.facebed.com/watch?v={m.group(2)}"),
         ]
 
         for pattern, builder in patterns:
