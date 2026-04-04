@@ -43,7 +43,6 @@ class ModC(commands.Cog):
     async def on_thread_create(self, thread: discord.Thread):
         if GUILDS_ID and thread.guild.id not in GUILDS_ID:
             return
-
         if thread.parent_id != FORUM_ID:
             return
 
@@ -57,7 +56,7 @@ class ModC(commands.Cog):
         except discord.NotFound:
             pin_notice = "Couldn't find the starter message to pin."
         except discord.HTTPException:
-            pin_notice = "Couldn't pin the starter message due to a Discord API error."
+            pin_notice = "Couldn't pin starter message due to a Discord API error."
 
         embed = discord.Embed(
             title="Support Channel",
@@ -71,13 +70,23 @@ class ModC(commands.Cog):
             ),
             color=discord.Color.blurple()
         )
-        embed.set_footer(text="You can use !close to close your post.")
+        embed.set_footer(text="You can use =close to close your post.")
 
-        content = thread.owner.mention
+        content = f"<@{thread.owner_id}>"
         if pin_notice:
             content += f"\n-# {pin_notice}"
 
-        await thread.send(content=content, embed=embed)
+        for _ in range(5):
+            try:
+                await thread.send(content=content, embed=embed)
+                return
+            except discord.Forbidden as e:
+                if "40058" in str(e):
+                    await asyncio.sleep(1)
+                    continue
+                raise
+            except discord.HTTPException:
+                await asyncio.sleep(1)
 
 
     @mod.command(name="purge", description="Clear messages")
@@ -222,7 +231,7 @@ class ModC(commands.Cog):
 
         await thread.send("Thread has been locked 🔒")
         await ctx.respond(f"Closing thread {thread.name}", ephemeral=True)
-        await thread.edit(archived=True, locked=True, name=f"🔒 {thread.name}")
+        await thread.edit(archived=True, locked=False, name=f"🔒 {thread.name}")
 
     @forum.command(description="Unlock a thread (mod only)")
     async def unlock(
@@ -256,7 +265,7 @@ class ModC(commands.Cog):
             return
 
         await ctx.reply("Thread closed and archived by author.")
-        await thread.edit(locked=True, archived=True)
+        await thread.edit(locked=True, archived=True, name=f"🔒 {thread.name}")
 
 
 def setup(bot: commands.Bot):
