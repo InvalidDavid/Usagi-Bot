@@ -4,6 +4,7 @@
 [![Stars][stars-shield]][stars-url]
 [![Issues][issues-shield]][issues-url]
 [![License][license-shield]][license-url]
+[![Discord][discord-shield]][discord-url]
 
 <br />
 <div align="center">
@@ -82,3 +83,5 @@ The runtime entrypoint stays in `main.py`, while the implementation now lives in
 [issues-url]: https://github.com/InvalidDavid/Usagi-Bot/issues
 [license-shield]:https://img.shields.io/github/license/InvalidDavid/Usagi-Bot.svg?style=for-the-badge
 [license-url]: https://github.com/InvalidDavid/Usagi-Bot/blob/main/LICENSE
+[discord-shield]: https://img.shields.io/badge/-Discord-black.svg?style=for-the-badge&logo=discord&colorB=555
+[discord-url]: https://discord.gg/FRvn4X2Q5y
