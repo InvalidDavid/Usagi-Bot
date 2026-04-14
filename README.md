@@ -1,6 +1,6 @@
 <!--
 readme template is from: https://github.com/othneildrew/Best-README-Template/blob/main/README.md
-v2 components builder website that can help to understand it better: 
+v2 components builder website that can help to understand it better: https://discord.builders/pycord-python-code-generator
 -->
 
 [![Contributors][contributors-shield]][contributors-url]
