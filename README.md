@@ -1,8 +1,9 @@
+
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
+[![Stars][stars-shield]][stars-url]
 [![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][https://github.com/InvalidDavid/Usagi-Bot/blob/main/LICENSE]
+[![License][license-shield]][license-url]
 
 <br />
 <div align="center">
@@ -66,3 +67,18 @@ The runtime entrypoint stays in `main.py`, while the implementation now lives in
 > - Forum and role settings are read safely from `.env` through the shared config loader.
 > - Don`t forget to install the package from the requirements.txt.
 > - As well the right Data in `.env`.
+
+
+
+<!-- MARKDOWN LINKS & IMAGES -->
+<!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
+[contributors-shield]: https://img.shields.io/github/contributors/othneildrew/Best-README-Template.svg?style=for-the-badge
+[contributors-url]: https://github.com/InvalidDavid/Usagi-Bot/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/othneildrew/Best-README-Template.svg?style=for-the-badge
+[forks-url]: https://github.com/InvalidDavid/Usagi-Bot/network/members
+[stars-shield]: https://img.shields.io/github/stars/othneildrew/Best-README-Template.svg?style=for-the-badge
+[stars-url]: https://github.com/InvalidDavid/Usagi-Bot/stargazers
+[issues-shield]: https://img.shields.io/github/issues/othneildrew/Best-README-Template.svg?style=for-the-badge
+[issues-url]: https://github.com/InvalidDavid/Usagi-Bot/issues
+[license-shield]: https://img.shields.io/github/license/othneildrew/Best-README-Template.svg?style=for-the-badge
+[license-url]: https://github.com/InvalidDavid/Usagi-Bot/LICENSE
