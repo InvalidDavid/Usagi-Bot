@@ -5,4 +5,3 @@ aiosqlite
 requests
 psutil
 apscheduler
-easy-pil
