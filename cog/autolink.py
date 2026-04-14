@@ -1,3 +1,6 @@
+
+# this system is only managable under 100 server due to cache issue, might wanna add a db aiosqlite and settings
+
 from collections import defaultdict, OrderedDict
 from utils.imports import *
 
