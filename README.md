@@ -93,10 +93,10 @@ This is an example of how to list things you need to use the software and how to
 
 
 > [!NOTE]
-> - Forum and role settings are read safely from `.env` through the shared config loader.
-> - Don`t forget to install the package from the requirements.txt.
-> - As well the right Data in `.env`.
-
+> - Use python 3.13 not 3.14!
+> - Need help? or got any question please contact me over Discord or Telegram.
+[![Telegram][telegram-shield]][telegram-url]
+[![Discord][dme-shield]][dme-url]
 
 
 <!-- MARKDOWN LINKS & IMAGES -->
@@ -115,3 +115,7 @@ This is an example of how to list things you need to use the software and how to
 [discord-url]: https://discord.gg/FRvn4X2Q5y
 [forked-shield]: https://img.shields.io/badge/-Github-black.svg?style=for-the-badge&logo=github&colorB=555
 [forked-url]: https://github.com/KotatsuApp/Emanon-GO
+[telegram-shield]: https://img.shields.io/badge/-Telegram-black.svg?style=for-the-badge&logo=telegram&colorB=555
+[telegram-url]: https://t.me/invalidxdavid#
+[dme-shield]: https://img.shields.io/badge/-Discord-black.svg?style=for-the-badge&logo=discord&colorB=555
+[dme-url]: https://discordapp.com/users/809739434537910283
