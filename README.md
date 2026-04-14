@@ -74,11 +74,11 @@ The runtime entrypoint stays in `main.py`, while the implementation now lives in
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
 [contributors-shield]: https://img.shields.io/github/contributors/InvalidDavid/Usagi-Bot.svg?style=for-the-badge
 [contributors-url]: https://github.com/InvalidDavid/Usagi-Bot/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/othneildrew/Best-README-Template.svg?style=for-the-badge
+[forks-shield]: https://img.shields.io/github/forks/InvalidDavid/Usagi-Bot.svg?style=for-the-badge
 [forks-url]: https://github.com/InvalidDavid/Usagi-Bot/network/members
-[stars-shield]: https://img.shields.io/github/stars/othneildrew/Best-README-Template.svg?style=for-the-badge
+[stars-shield]: https://img.shields.io/github/stars/InvalidDavid/Usagi-Bot.svg?style=for-the-badge
 [stars-url]: https://github.com/InvalidDavid/Usagi-Bot/stargazers
-[issues-shield]: https://img.shields.io/github/issues/othneildrew/Best-README-Template.svg?style=for-the-badge
+[issues-shield]: https://img.shields.io/github/issues/InvalidDavid/Usagi-Bot.svg?style=for-the-badge
 [issues-url]: https://github.com/InvalidDavid/Usagi-Bot/issues
-[license-shield]: https://img.shields.io/github/license/othneildrew/Best-README-Template.svg?style=for-the-badge
+[license-shield]:https://img.shields.io/github/license/InvalidDavid/Usagi-Bot.svg?style=for-the-badge
 [license-url]: https://github.com/InvalidDavid/Usagi-Bot/blob/main/LICENSE
