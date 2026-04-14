@@ -37,6 +37,54 @@ Simply rewritten and up to date code with many more featuers manga bot which got
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
+
+<!-- GETTING STARTED -->
+## Getting Started
+
+This is an example of how you may give instructions on setting up your project locally.
+To get a local copy up and running follow these simple example steps.
+
+### Prerequisites
+
+This is an example of how to list things you need to use the software and how to install them.
+* npm
+  ```sh
+  npm install npm@latest -g
+  ```
+
+### Installation
+
+1. Get a the essential data / tokesn for the `.env` from [Discord Developer Site](https://discord.com/developers/home)
+2. Clone the repo
+   ```sh
+   git clone https://github.com/InvalidDavid/Usagi-Bot.git
+   ```
+3. Install packages (Python 3.13 not 3.14 due to compatibility issues)
+   ```sh
+   pip install -r requirements.txt
+   ```
+4. Enter your data in `.env`
+   ```py
+    TOKEN=#bot token
+    GUILDS=#guild id
+    OWNER=#same principle as below
+    FORUM_ID=# WORKS ONLY FOR ONE SINGLE CHANNEL NOT MULTIPLE ONES
+    MOD_ROLE_IDS=
+    ADMIN_ROLE_IDS= # role ids, if multiple ones split them with a ,
+    WEBHOOK_URL= #webhook url, not required
+    ERROREMOJI="❌" # error emoji
+    SUPPORT_SERVER="https://github.com/InvalidDavid/Usagi-Bot"
+   ```
+6. Check if you have all the folders needed
+   ```sh
+   - Data
+   - cog
+   - utils
+     - error
+   ```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
 > [!NOTE]
 > - Forum and role settings are read safely from `.env` through the shared config loader.
 > - Don`t forget to install the package from the requirements.txt.
