@@ -1,9 +1,7 @@
 ---
 name: " \tBug report \U0001F41E"
 about: Create a bug report
-title: bug
-labels: "Bug report \U0001F41E"
-assignees: ''
+labels: "Bug report"
 
 ---
 
