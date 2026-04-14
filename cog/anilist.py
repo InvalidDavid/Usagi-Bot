@@ -5,7 +5,7 @@ class AniList(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def search_anilist(self, name, media_type):
+    def search_anilist(self, name, type):
         query = """
         query ($search: String!, $type: MediaType) {
           Page(page: 1, perPage: 10) {
@@ -26,7 +26,7 @@ class AniList(commands.Cog):
 
         variables = {
             "search": name,
-            "type": media_type
+            "type": type
         }
 
         r = requests.post(
@@ -98,7 +98,7 @@ class AniList(commands.Cog):
     async def search(
         self,
         ctx: discord.ApplicationContext,
-        media_type: Option(
+        type: Option(
             str,
             "Choose type",
             choices=[
@@ -111,7 +111,7 @@ class AniList(commands.Cog):
 
         await ctx.defer()
 
-        media = self.search_anilist(title, media_type)
+        media = self.search_anilist(title, type)
 
         if not media:
             await ctx.respond("No results found.")
