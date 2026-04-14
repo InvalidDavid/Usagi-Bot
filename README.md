@@ -1,3 +1,32 @@
+[![Contributors][contributors-shield]][contributors-url]
+[![Forks][forks-shield]][forks-url]
+[![Stargazers][stars-shield]][stars-url]
+[![Issues][issues-shield]][issues-url]
+[![Unlicense License][license-shield]][license-url]
+[![LinkedIn][linkedin-shield]][linkedin-url]
+
+<br />
+<div align="center">
+  <a href="https://github.com/othneildrew/Best-README-Template">
+    <img src="ignore/logo.png" alt="Logo" width="80" height="80">
+  </a>
+
+  <h3 align="center">Best-README-Template</h3>
+
+  <p align="center">
+    An awesome README template to jumpstart your projects!
+    <br />
+    <a href="https://github.com/othneildrew/Best-README-Template"><strong>Explore the docs »</strong></a>
+    <br />
+    <br />
+    <a href="https://discord.com/oauth2/authorize?client_id=1398686204228014091&permissions=8&integration_type=0&scope=bot">View Demo (Bot Link)</a>
+    &middot;
+    <a href="https://github.com/InvalidDavid/Usagi-Bot/issues/new?template=--bug-report-%F0%9F%90%9E.md">Report Bug</a>
+    &middot;
+    <a href="https://github.com/InvalidDavid/Usagi-Bot/issues/new?template=feature-request-%F0%9F%9A%80.md">Request Feature</a>
+  </p>
+</div>
+
 # Manga-Bot
 
 A Py-cord bot for the Mabga Discord server.
