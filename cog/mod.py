@@ -1,33 +1,15 @@
 from utils.imports import *
-from utils.secrets import GUILDS_ID, MOD_ROLE_IDS, ADMIN_ROLE_IDS, FORUM_ID
 
-async def check_permissions(ctx: discord.ApplicationContext):
-    if GUILDS_ID and ctx.guild_id not in GUILDS_ID:
-        return False, "This command can only be used in the configured server."
-
-    user_roles = [r.id for r in ctx.author.roles]
-    if not any(r in MOD_ROLE_IDS + ADMIN_ROLE_IDS for r in user_roles):
-        return False, "You need Mod or Admin role to use this command."
-
-    return True, None
-
-
-async def tag_autocomplete(ctx: discord.AutocompleteContext):
-    if GUILDS_ID and ctx.interaction.guild_id not in GUILDS_ID:
+async def tag_thread(ctx: discord.AutocompleteContext):
+    channel = ctx.interaction.channel
+    if not isinstance(channel, discord.Thread):
         return []
 
-    user_roles = [r.id for r in ctx.interaction.user.roles]
-    if not any(r in MOD_ROLE_IDS + ADMIN_ROLE_IDS for r in user_roles):
+    parent = channel.parent
+    if not isinstance(parent, discord.ForumChannel):
         return []
 
-    forum_channel: discord.ForumChannel = ctx.bot.get_channel(FORUM_ID)
-    if not forum_channel:
-        try:
-            forum_channel = await ctx.bot.fetch_channel(FORUM_ID)
-        except discord.NotFound:
-            return []
-
-    all_tags = [t.name for t in forum_channel.available_tags]
+    all_tags = [t.name for t in parent.available_tags]
     value = ctx.value.lower()
     return [t for t in all_tags if value in t.lower()][:25]
 
@@ -39,66 +21,59 @@ class ModC(commands.Cog):
     mod = SlashCommandGroup("mod", "Mod commands")
     forum = SlashCommandGroup("forum", "Forum management commands")
 
-    @commands.Cog.listener()
-    async def on_thread_create(self, thread: discord.Thread):
-        if GUILDS_ID and thread.guild.id not in GUILDS_ID:
-            return
-        if thread.parent_id != FORUM_ID:
-            return
-
-        pin_notice = None
-
-        try:
-            starter_msg = await thread.fetch_message(thread.id)
-            await starter_msg.pin()
-        except discord.Forbidden:
-            pin_notice = "Couldn't pin starter message, missing permissions."
-        except discord.NotFound:
-            pin_notice = "Couldn't find the starter message to pin."
-        except discord.HTTPException:
-            pin_notice = "Couldn't pin starter message due to a Discord API error."
-
-        embed = discord.Embed(
-            title="Support Channel",
-            description=(
-                "Rules for asking for support:\n"
-                "- Provide as much details as you can about the issue. "
-                "(For example a step-by-step way on how to encounter that issue)\n"
-                "- Screenshots or screen recordings can help us understand the issue better, "
-                "so it's recommended you send at least one in your post.\n"
-                "- Check <#1488492402623905913>."
-            ),
-            color=discord.Color.blurple()
-        )
-        embed.set_footer(text="You can use =close to close your post.")
-
-        content = f"<@{thread.owner_id}>"
-        if pin_notice:
-            content += f"\n-# {pin_notice}"
-
-        for _ in range(5):
-            try:
-                await thread.send(content=content, embed=embed)
-                return
-            except discord.Forbidden as e:
-                if "40058" in str(e):
-                    await asyncio.sleep(1)
-                    continue
-                raise
-            except discord.HTTPException:
-                await asyncio.sleep(1)
-
+    # @commands.Cog.listener()
+    # async def on_thread_create(self, thread: discord.Thread):
+    #     if not isinstance(thread.parent, discord.ForumChannel):
+    #         return
+    #
+    #     pin_notice = None
+    #
+    #     try:
+    #         starter_msg = await thread.fetch_message(thread.id)
+    #         await starter_msg.pin()
+    #     except discord.Forbidden:
+    #         pin_notice = "Couldn't pin starter message, missing permissions."
+    #     except discord.NotFound:
+    #         pin_notice = "Couldn't find the starter message to pin."
+    #     except discord.HTTPException:
+    #         pin_notice = "Couldn't pin starter message due to a Discord API error."
+    #
+    #     embed = discord.Embed(
+    #         title="Support Channel",
+    #         description=(
+    #             "Rules for asking for support:\n"
+    #             "- Provide as much details as you can about the issue. "
+    #             "(For example a step-by-step way on how to encounter that issue)\n"
+    #             "- Screenshots or screen recordings can help us understand the issue better, "
+    #             "so it's recommended you send at least one in your post.\n"
+    #             "- Check <#1488492402623905913>."
+    #         ),
+    #         color=discord.Color.blurple()
+    #     )
+    #     embed.set_footer(text="You can use =close to close your post.")
+    #
+    #     content = f"<@{thread.owner_id}>"
+    #     if pin_notice:
+    #         content += f"\n-# {pin_notice}"
+    #
+    #     for _ in range(5):
+    #         try:
+    #             await thread.send(content=content, embed=embed)
+    #             return
+    #         except discord.Forbidden as e:
+    #             if "40058" in str(e):
+    #                 await asyncio.sleep(1)
+    #                 continue
+    #             raise
+    #         except discord.HTTPException:
+    #             await asyncio.sleep(1)
 
     @mod.command(name="purge", description="Clear messages")
     @commands.guild_only()
     @commands.cooldown(1, 10, commands.BucketType.user)
+    @commands.has_permissions(manage_messages=True)
     async def purge(self, ctx: discord.ApplicationContext, amount: int):
-
         await ctx.defer(ephemeral=True)
-
-        ok, error = await check_permissions(ctx)
-        if not ok:
-            return await ctx.followup.send(error, ephemeral=True)
 
         if amount < 1 or amount > 100:
             return await ctx.followup.send(
@@ -122,6 +97,7 @@ class ModC(commands.Cog):
 
         try:
             to_delete = []
+            cutoff = discord.utils.utcnow() - timedelta(days=14)
 
             async for msg in channel.history(limit=amount * 5):
                 if len(to_delete) >= amount:
@@ -130,11 +106,14 @@ class ModC(commands.Cog):
                 if msg.pinned:
                     continue
 
+                if msg.created_at < cutoff:
+                    continue
+
                 to_delete.append(msg)
 
             if not to_delete:
                 return await ctx.followup.send(
-                    "No eligible messages found to delete.",
+                    "No eligible messages found to delete. (Can`t delete messages that are older than 14 days)",
                     ephemeral=True
                 )
 
@@ -186,86 +165,86 @@ class ModC(commands.Cog):
                 ephemeral=True
             )
 
-
     @forum.command(description="Change a thread's tag (2 use per post limit)")
+    @commands.has_permissions(manage_threads=True)
+    @commands.cooldown(1, 10, commands.BucketType.user)
     async def tag(
-            self,
-            ctx: discord.ApplicationContext,
-            tag: Option(str, "Select a tag", autocomplete=tag_autocomplete)
+        self,
+        ctx: discord.ApplicationContext,
+        tag: Option(str, "Select a tag", autocomplete=tag_thread)
     ):
-        if not await check_permissions(ctx):
-            return
-
         await ctx.defer(ephemeral=True)
 
         thread = ctx.channel
-        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent,
-                                                                    discord.ForumChannel) or thread.parent_id != FORUM_ID:
-            await ctx.respond("This command can only be used in the configured forum.", ephemeral=True)
+        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel):
+            await ctx.followup.send("This command can only be used in a forum thread.", ephemeral=True)
             return
 
         forum_channel: discord.ForumChannel = thread.parent
         tag_obj = next((t for t in forum_channel.available_tags if t.name == tag), None)
         if not tag_obj:
-            await ctx.respond("Tag not found.", ephemeral=True)
+            await ctx.followup.send("Tag not found.", ephemeral=True)
             return
 
         nt = re.sub(r"^\[.*?]\s*", "", thread.name)
         nt = f"[{tag_obj.name}] {nt}"
 
         await thread.edit(applied_tags=[tag_obj], name=nt)
-        await ctx.respond(f"Thread tag set to: {tag_obj.name}", ephemeral=True)
+        await ctx.followup.send(f"Thread tag set to: {tag_obj.name}", ephemeral=True)
 
-    @forum.command(description="Close the thread (mod only)")
-    async def close(self, ctx: discord.ApplicationContext):
-        if not await check_permissions(ctx):
-            return
-
+    @forum.command(name="close", description="Close the thread")
+    @commands.has_permissions(manage_threads=True)
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def close_thread(self, ctx: discord.ApplicationContext):
         thread = ctx.channel
 
-        if not isinstance(thread, discord.Thread) or thread.parent_id != FORUM_ID:
+        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel):
             await ctx.respond(
-                "This command can only be used in the configured forum.", ephemeral=True
+                "This command can only be used in a forum thread.", ephemeral=True
             )
             return
 
+        new_name = re.sub(r"^🔒\s*", "", thread.name)
+        new_name = f"🔒 {new_name}"
+
         await thread.send("Thread has been locked 🔒")
         await ctx.respond(f"Closing thread {thread.name}", ephemeral=True)
-        await thread.edit(archived=True, locked=False, name=f"🔒 {thread.name}")
+        await thread.edit(archived=True, locked=True, name=new_name)
 
-    @forum.command(description="Unlock a thread (mod only)")
-    async def unlock(
-            self,
-            ctx: discord.ApplicationContext
+    @forum.command(name="unlock", description="Unlock a thread")
+    @commands.has_permissions(manage_threads=True)
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def unlock_thread(
+        self,
+        ctx: discord.ApplicationContext
     ):
-        if not await check_permissions(ctx):
+        thread = ctx.channel
+        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel):
+            await ctx.respond("This command can only be used in a forum thread.", ephemeral=True)
             return
 
-        thread = ctx.channel
-        if not isinstance(thread, discord.Thread) or thread.parent_id != FORUM_ID:
-            await ctx.respond("This command can only be used in the configured forum.", ephemeral=True)
-            return
-        await thread.edit(archived=False, locked=False)
+        new_name = re.sub(r"^🔒\s*", "", thread.name)
+
+        await thread.edit(archived=False, locked=False, name=new_name)
         await ctx.respond(f"Thread '{thread.name}' unlocked.", ephemeral=True)
 
     @commands.command(name="close", description="Close and archive your thread (author only)")
     async def close(self, ctx):
-        if GUILDS_ID and ctx.guild.id not in GUILDS_ID:
-            await ctx.reply("This command can only be used in the configured server.")
-            return
-
         thread = ctx.channel
 
-        if not isinstance(thread, discord.Thread) or thread.parent_id != FORUM_ID:
-            await ctx.reply("This command can only be used in the configured forum.")
+        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel):
+            await ctx.reply("This command can only be used in a forum thread.")
             return
 
-        if ctx.author != thread.owner:
+        if ctx.author.id != thread.owner_id:
             await ctx.reply("Only the thread author can close this thread.")
             return
 
+        new_name = re.sub(r"^🔒\s*", "", thread.name)
+        new_name = f"🔒 {new_name}"
+
         await ctx.reply("Thread closed and archived by author.")
-        await thread.edit(locked=True, archived=True, name=f"🔒 {thread.name}")
+        await thread.edit(locked=False, archived=True, name=new_name)
 
 
 def setup(bot: commands.Bot):
