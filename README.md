@@ -1,4 +1,3 @@
-
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
 [![Stars][stars-shield]][stars-url]
@@ -12,10 +11,10 @@
     <img src="ignore/logo.png" alt="Logo" width="80" height="80">
   </a>
 
-  <h3 align="center">Best-README-Template</h3>
+  <h3 align="center">Usagi-Bot</h3>
 
   <p align="center">
-    A simple private discord Bot with many features!
+    A simple private discord Bot with many features for the Kotatsu / Usagi Discord Server!
     <br />
     <a href="https://github.com/InvalidDavid/Usagi-Bot"><strong>Explore the docs »</strong></a>
     <br />
@@ -35,7 +34,15 @@ Simply rewritten and up to date code with many more featuers manga bot which got
 
 ...
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<!-- USAGE EXAMPLES -->
+## Features & Examples
+
+- list....
+
+picture1
+picture2
+picture3
+
 
 
 <!-- GETTING STARTED -->
@@ -84,7 +91,6 @@ This is an example of how to list things you need to use the software and how to
      - error
    ```
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 > [!NOTE]
 > - Forum and role settings are read safely from `.env` through the shared config loader.
