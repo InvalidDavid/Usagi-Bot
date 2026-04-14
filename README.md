@@ -28,41 +28,14 @@
   </p>
 </div>
 
-# Manga-Bot
+<!-- ABOUT THE PROJECT -->
+## About The Project
 
-A Py-cord bot for the Mabga Discord server.
+Simply rewritten and up to date code with many more featuers manga bot which got as well modernized, forked from: [![Github][forked-shield]][forked-url].
 
-### Some features works only on one server.
-first time using rly README.md so gonna update that one in the feature better.
+...
 
-## Local Setup
-
-Use Python 3.13 for this project. Python 3.14 is currently too new for the Bot's Py-cord stack and can break local startup.
-
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
-
-If you already created `.venv` with another Python version, remove it and recreate it with Python 3.13 before installing dependencies again.
-
-## Architecture
-
-The runtime entrypoint stays in `main.py`, while the implementation now lives in a modular internal package:
-
-```text
-├── cog/
-│   ├── anilist          # Search for Anime / Manga from the Anilist list through the API search
-│   ├── errorhandler     # Automatic handler for slash / normal commands as well on_global_error by unexpected errors goes into a seperate server which you can configurate it in the .env for the webhook
-│   ├── games            # Rock-Paper-Scissors & TicTacToe game, both with random generated Moves
-│   ├── mod              # Only moderation for Threads (Support stuff)
-│   ├── owner            # cog commands and owner
-│   └── user             # at the moment only a info bot stat command
-├── main.py          
-└── requirements.txt
-```
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 > [!NOTE]
 > - Forum and role settings are read safely from `.env` through the shared config loader.
@@ -85,3 +58,5 @@ The runtime entrypoint stays in `main.py`, while the implementation now lives in
 [license-url]: https://github.com/InvalidDavid/Usagi-Bot/blob/main/LICENSE
 [discord-shield]: https://img.shields.io/badge/-Discord-black.svg?style=for-the-badge&logo=discord&colorB=555
 [discord-url]: https://discord.gg/FRvn4X2Q5y
+[forked-shield]: https://img.shields.io/badge/-Github-black.svg?style=for-the-badge&logo=github&colorB=555
+[forked-url]: https://github.com/KotatsuApp/Emanon-GO
