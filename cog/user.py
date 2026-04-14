@@ -1,15 +1,5 @@
 from utils.imports import *
 
-
-ansi_blue = "\u001b[2;34m"
-ansi_reset = "\u001b[0m"
-
-
-
-# ---------------------------------------
-
-
-
 class HelpView(View):
     def __init__(self, bot: discord.Bot, embeds, page_info=None):
         super().__init__(timeout=60)
@@ -24,6 +14,7 @@ class HelpView(View):
         self.next_button.callback = self.next_page
 
         options = []
+        # splits slash commands if in a cog has too many due to discord limitations
         for idx, embed in enumerate(embeds):
             if "📂" in embed.title:
                 base_name = embed.title.split("📂 ")[1].split(" (Page")[0].split(" Commands")[0]
@@ -123,25 +114,13 @@ def gather_commands_recursive(cmd, prefix=""):
         cmds.append((current_name.strip(), cmd.description or "No description"))
     return cmds
 
-
-
 # ---------------------------------------
-
-
-
 
 class User(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.MAX_FIELDS_PER_EMBED = 20
         self.start_time = datetime.now(timezone.utc)
-
-    # info = SlashCommandGroup("info", "Infos")
-
-
-
-    # ---------------------------------------
-
 
 
     def format_timedelta(self, delta: timedelta) -> str:
@@ -208,35 +187,35 @@ class User(commands.Cog):
             )
 
             embed.add_field(name="🆔 Bot ID",
-                            value=f"```ansi\n{ansi_blue}{self.bot.user.id if self.bot.user else 'N/A'}{ansi_reset}```",
+                            value=f"```{self.bot.user.id if self.bot.user else 'N/A'}```",
                             inline=True)
-            embed.add_field(name="📛 Bot Name", value=f"```ansi\n{ansi_blue}{self.bot.user}{ansi_reset}```", inline=True)
+            embed.add_field(name="📛 Bot Name", value=f"```{self.bot.user}```", inline=True)
 
             embed.add_field(name="📅 Bot created", value=f"{created_str}", inline=False)
 
             embed.add_field(name="🕰️ Bot Uptime",
-                            value=(f"```ansi\n{ansi_blue}{self.format_timedelta(uptime)}{ansi_reset}```"
+                            value=(f"```{self.format_timedelta(uptime)}```"
                                    f"Last restart: {format_dt(self.start_time, 'F')} ({format_dt(self.start_time, 'R')})"),
                             inline=False)
 
-            embed.add_field(name="🏓 WebSocket Ping", value=f"```ansi\n{ansi_blue}{ws_ping} ms{ansi_reset}```",
+            embed.add_field(name="🏓 WebSocket Ping", value=f"```{ws_ping} ms```",
                             inline=True)
             embed.add_field(name="📡 API Ping",
-                            value=f"```ansi\n{ansi_blue}{api_ping if api_ping is not None else 'Fehler'} ms{ansi_reset}```",
+                            value=f"```{api_ping if api_ping is not None else 'Fehler'} ms```",
                             inline=True)
-            embed.add_field(name="⚡ Command-Reactiontime", value=f"```ansi\n{ansi_blue}{cmd_latency} ms{ansi_reset}```", inline=True)
+            embed.add_field(name="⚡ Command-Reactiontime", value=f"```{cmd_latency} ms```", inline=True)
 
 
-            embed.add_field(name="💻 CPU", value=f"```ansi\n{ansi_blue}{cpu_percent:.1f}%{ansi_reset}```",
+            embed.add_field(name="💻 CPU", value=f"```{cpu_percent:.1f}%```",
                             inline=True)
-            embed.add_field(name="🧠 RAM", value=f"```ansi\n{ansi_blue}{ram_percent:.2f}%{ansi_reset}```",
+            embed.add_field(name="🧠 RAM", value=f"```{ram_percent:.2f}%```",
                             inline=True)
-            embed.add_field(name="🖥️ Platform", value=f"```ansi\n{ansi_blue}{system_info}{ansi_reset}```", inline=True)
+            embed.add_field(name="🖥️ Platform", value=f"```{system_info}```", inline=True)
 
 
-            embed.add_field(name="🐍 Python Version", value=f"```ansi\n{ansi_blue}{python_version}{ansi_reset}```",
+            embed.add_field(name="🐍 Python Version", value=f"```{python_version}```",
                             inline=True)
-            embed.add_field(name="📦 Py-cord Version", value=f"```ansi\n{ansi_blue}{discord_py_version}{ansi_reset}```",
+            embed.add_field(name="📦 Py-cord Version", value=f"```{discord_py_version}```",
                             inline=True)
 
             embed.set_footer(text=f"Requested from {ctx.author}", icon_url=ctx.author.display_avatar.url)
