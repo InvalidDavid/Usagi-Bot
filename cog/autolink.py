@@ -1,7 +1,9 @@
-# tiktok got removed due mirror site got taken down
 from collections import defaultdict
 from dataclasses import dataclass
-from urllib.parse import parse_qs, urlparse
+import heapq
+from typing import Callable, TypeAlias
+from urllib.parse import ParseResult, parse_qs, urlparse
+
 from utils.imports import *
 
 logger = logging.getLogger("bot.autolink")
@@ -11,6 +13,12 @@ URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$", re.ASCII)
 REDDIT_ID_RE = re.compile(r"^[a-z0-9]+$", re.ASCII)
+INSTAGRAM_SHORTCODE_RE = re.compile(r"^[A-Za-z0-9_-]+$", re.ASCII)
+
+PlatformParser: TypeAlias = Callable[
+    [str, str, list[str], dict[str, list[str]]],
+    "LinkMatch | None",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +31,17 @@ class LinkMatch:
 class Autolink(commands.Cog):
     CACHE_TTL_SECONDS = 300.0
     CACHE_SIZE_PER_GUILD = 500
+    # Facebook video/reel IDs can vary in length; 20 is a reasonable upper bound
+    # to catch obviously malformed IDs early.
+    MAX_FACEBOOK_ID_LENGTH = 20
+
+    MIRROR_DOMAINS = {
+        "instagram": "kkinstagram.com",
+        "youtube": "koutube.com",
+        "youtube_short": "koutu.be",
+        "reddit": "rxddit.com",
+        "facebook": "www.facebed.com",
+    }
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -63,8 +82,15 @@ class Autolink(commands.Cog):
 
         if len(guild_cache) > self.CACHE_SIZE_PER_GUILD:
             overflow = len(guild_cache) - self.CACHE_SIZE_PER_GUILD
-            oldest_items = sorted(guild_cache.items(), key=lambda item: item[1])[:overflow]
-            for key, _ in oldest_items:
+            oldest_keys = [
+                key
+                for key, _ in heapq.nsmallest(
+                    overflow,
+                    guild_cache.items(),
+                    key=lambda item: item[1],
+                )
+            ]
+            for key in oldest_keys:
                 guild_cache.pop(key, None)
 
         if not guild_cache:
@@ -93,7 +119,13 @@ class Autolink(commands.Cog):
         self.processed_links_by_guild[guild_id][dedup_key] = now + self.CACHE_TTL_SECONDS
 
     def _clean_url_candidate(self, raw_url: str) -> str:
-        cleaned = raw_url.rstrip(".,!?:;)]}>\"'")
+        cleaned = raw_url.strip()
+
+        if cleaned.startswith("<"):
+            cleaned = cleaned[1:]
+
+        cleaned = cleaned.rstrip(".,!?:;)]}>\"'")
+        cleaned = cleaned.rstrip(">")
         return cleaned.strip()
 
     def _extract_urls(self, content: str) -> list[str]:
@@ -132,6 +164,10 @@ class Autolink(commands.Cog):
         current_links: list[LinkMatch] = []
 
         for link in links:
+            if not link.mirror_url:
+                logger.warning("Empty mirror URL for original: %s", link.original_url)
+                continue
+
             candidate_links = current_links + [link]
             footer = self._format_footer(candidate_links[0].original_url, message_url)
             candidate_text = "\n".join(item.mirror_url for item in candidate_links) + footer
@@ -157,36 +193,54 @@ class Autolink(commands.Cog):
         matches_by_key: dict[str, LinkMatch] = {}
 
         for url in self._extract_urls(content):
-            parsed = urlparse(url)
-            match = self._build_link_match(url, parsed)
+            try:
+                parsed = urlparse(url)
+                match = self._build_link_match(url, parsed)
+            except Exception:
+                logger.debug("Failed to parse candidate URL: %s", url, exc_info=True)
+                continue
+
             if match is not None:
                 matches_by_key.setdefault(match.dedup_key, match)
 
+        if matches_by_key:
+            logger.debug("Extracted %d supported link(s) from content", len(matches_by_key))
+
         return list(matches_by_key.values())
 
-    def _build_link_match(self, original_url: str, parsed) -> LinkMatch | None:
+    def _build_link_match(self, original_url: str, parsed: ParseResult) -> LinkMatch | None:
         host = self._normalize_host(parsed.netloc)
+        if not host:
+            return None
+
         path = parsed.path or "/"
         path_parts = [part for part in path.split("/") if part]
         query = parse_qs(parsed.query, keep_blank_values=False)
 
-        # Instagram direct post/reel URLs.
-        if host == "instagram.com":
-            return self._parse_instagram(original_url, path_parts)
+        parser = self._get_platform_parser(host)
+        if parser is None:
+            return None
 
-        # YouTube direct video/live/post URLs.
-        if host in {"youtube.com", "youtu.be"}:
-            return self._parse_youtube(original_url, host, path_parts, query)
+        return parser(original_url, host, path_parts, query)
 
-        # Reddit post/share/gallery URLs.
-        if host in {"reddit.com", "redd.it"}:
-            return self._parse_reddit(original_url, host, path_parts)
+    def _get_platform_parser(self, host: str) -> PlatformParser | None:
+        parsers: dict[str, PlatformParser] = {
+            "instagram.com": lambda url, _host, parts, _query: self._parse_instagram(url, parts),
+            "youtube.com": self._parse_youtube,
+            "youtu.be": self._parse_youtube,
+            "reddit.com": lambda url, host_name, parts, _query: self._parse_reddit(url, host_name, parts),
+            "redd.it": lambda url, host_name, parts, _query: self._parse_reddit(url, host_name, parts),
+            "facebook.com": self._parse_facebook,
+            "fb.watch": self._parse_facebook,
+        }
+        return parsers.get(host)
 
-        # Facebook video/reel/watch URLs.
-        if host in {"facebook.com", "fb.watch"}:
-            return self._parse_facebook(original_url, host, path_parts, query)
-
-        return None
+    def _make_link_match(self, original_url: str, mirror_url: str, dedup_key: str) -> LinkMatch:
+        return LinkMatch(
+            original_url=original_url,
+            mirror_url=mirror_url,
+            dedup_key=dedup_key,
+        )
 
     def _parse_instagram(self, original_url: str, path_parts: list[str]) -> LinkMatch | None:
         if len(path_parts) < 2:
@@ -202,13 +256,14 @@ class Autolink(commands.Cog):
         if kind not in {"p", "reel", "tv"}:
             return None
 
-        if not shortcode:
+        if not shortcode or not INSTAGRAM_SHORTCODE_RE.fullmatch(shortcode):
+            logger.debug("Invalid Instagram shortcode: %s", shortcode)
             return None
 
         canonical_path = f"/{kind}/{shortcode}"
-        return LinkMatch(
+        return self._make_link_match(
             original_url=original_url,
-            mirror_url=f"https://kkinstagram.com{canonical_path}",
+            mirror_url=f"https://{self.MIRROR_DOMAINS['instagram']}{canonical_path}",
             dedup_key=f"instagram:{canonical_path.lower()}",
         )
 
@@ -219,69 +274,99 @@ class Autolink(commands.Cog):
         path_parts: list[str],
         query: dict[str, list[str]],
     ) -> LinkMatch | None:
-        target: str | None = None
-        target_type: str | None = None
-
-        if host == "youtu.be":
-            if path_parts:
-                candidate = path_parts[0].strip()
-                if YOUTUBE_ID_RE.fullmatch(candidate):
-                    target = candidate
-                    target_type = "video"
-
-        elif host == "youtube.com":
-            first = path_parts[0].lower() if path_parts else ""
-
-            # Standard watch page.
-            if first == "watch":
-                candidate = query.get("v", [None])[0]
-                if candidate and YOUTUBE_ID_RE.fullmatch(candidate):
-                    target = candidate
-                    target_type = "video"
-
-            # Shorts route.
-            elif first == "shorts" and len(path_parts) >= 2:
-                candidate = path_parts[1].strip()
-                if YOUTUBE_ID_RE.fullmatch(candidate):
-                    target = candidate
-                    target_type = "video"
-
-            # Embed route.
-            elif first == "embed" and len(path_parts) >= 2:
-                candidate = path_parts[1].strip()
-                if YOUTUBE_ID_RE.fullmatch(candidate):
-                    target = candidate
-                    target_type = "video"
-
-            # Legacy /v/<id> route.
-            elif first == "v" and len(path_parts) >= 2:
-                candidate = path_parts[1].strip()
-                if YOUTUBE_ID_RE.fullmatch(candidate):
-                    target = candidate
-                    target_type = "video"
-
-            # Live route.
-            elif first == "live" and len(path_parts) >= 2:
-                candidate = path_parts[1].strip()
-                if YOUTUBE_ID_RE.fullmatch(candidate):
-                    target = candidate
-                    target_type = "video"
-
-        if target is None or target_type is None:
+        parsed_target = self._extract_youtube_target(host, path_parts, query)
+        if parsed_target is None:
             return None
 
-        if target_type == "video":
-            return LinkMatch(
-                original_url=original_url,
-                mirror_url=f"https://koutube.com/watch?v={target}",
-                dedup_key=f"youtube:{target.lower()}",
-            )
+        video_id, is_shorts, prefer_short_domain = parsed_target
 
-        return LinkMatch(
+        if prefer_short_domain:
+            mirror_url = f"https://{self.MIRROR_DOMAINS['youtube_short']}/{video_id}"
+            if is_shorts:
+                mirror_url += "?shorts"
+        else:
+            mirror_url = f"https://{self.MIRROR_DOMAINS['youtube']}/watch?v={video_id}"
+            if is_shorts:
+                mirror_url += "&shorts"
+
+        return self._make_link_match(
             original_url=original_url,
-            mirror_url=f"https://koutube.com/post/{target}",
-            dedup_key=f"youtube-post:{target.lower()}",
+            mirror_url=mirror_url,
+            dedup_key=f"youtube:{video_id.lower()}",
         )
+
+    def _extract_youtube_target(
+        self,
+        host: str,
+        path_parts: list[str],
+        query: dict[str, list[str]],
+    ) -> tuple[str, bool, bool] | None:
+        if host == "youtu.be":
+            if not path_parts:
+                return None
+
+            candidate = path_parts[0].strip()
+            if YOUTUBE_ID_RE.fullmatch(candidate):
+                return candidate, False, True
+            return None
+
+        if host != "youtube.com":
+            return None
+
+        first = path_parts[0].lower() if path_parts else ""
+
+        extractors: dict[str, Callable[[], tuple[str, bool, bool] | None]] = {
+            "watch": lambda: self._youtube_watch_target(query),
+            "shorts": lambda: self._youtube_shorts_target(path_parts),
+            "embed": lambda: self._youtube_path_target(path_parts, 1),
+            "v": lambda: self._youtube_path_target(path_parts, 1),
+            "live": lambda: self._youtube_path_target(path_parts, 1),
+        }
+
+        extractor = extractors.get(first)
+        if extractor is None:
+            if first:
+                logger.debug("Unknown YouTube path: /%s", first)
+            return None
+
+        return extractor()
+
+    def _youtube_watch_target(self, query: dict[str, list[str]]) -> tuple[str, bool, bool] | None:
+        video_id = self._validated_youtube_id(query.get("v", [None])[0])
+        if video_id is None:
+            return None
+
+        # this is for the mirror website ?shorts, youtube itself doenst have it.
+        shorts_list = query.get("shorts", [])
+        is_shorts = bool(shorts_list) and shorts_list[0].lower() not in {"0", "false", "no"}
+        return video_id, is_shorts, False
+
+    def _youtube_shorts_target(self, path_parts: list[str]) -> tuple[str, bool, bool] | None:
+        video_id = self._path_part_youtube_id(path_parts, 1)
+        if video_id is None:
+            return None
+
+        return video_id, True, False
+
+    def _youtube_path_target(self, path_parts: list[str], index: int) -> tuple[str, bool, bool] | None:
+        video_id = self._path_part_youtube_id(path_parts, index)
+        if video_id is None:
+            return None
+
+        return video_id, False, False
+
+    def _validated_youtube_id(self, candidate: str | None) -> str | None:
+        if candidate and YOUTUBE_ID_RE.fullmatch(candidate):
+            return candidate
+        return None
+
+    def _path_part_youtube_id(self, path_parts: list[str], index: int) -> str | None:
+        if len(path_parts) <= index:
+            return None
+        return self._validated_youtube_id(path_parts[index].strip())
+
+    def _valid_facebook_id(self, candidate: str | None) -> bool:
+        return bool(candidate) and len(candidate) <= self.MAX_FACEBOOK_ID_LENGTH
 
     def _parse_reddit(self, original_url: str, host: str, path_parts: list[str]) -> LinkMatch | None:
         if host == "redd.it":
@@ -292,9 +377,9 @@ class Autolink(commands.Cog):
             if not REDDIT_ID_RE.fullmatch(post_id):
                 return None
 
-            return LinkMatch(
+            return self._make_link_match(
                 original_url=original_url,
-                mirror_url=f"https://rxddit.com/comments/{post_id}",
+                mirror_url=f"https://{self.MIRROR_DOMAINS['reddit']}/comments/{post_id}",
                 dedup_key=f"reddit:{post_id}",
             )
 
@@ -304,9 +389,9 @@ class Autolink(commands.Cog):
             if not share_id:
                 return None
 
-            return LinkMatch(
+            return self._make_link_match(
                 original_url=original_url,
-                mirror_url=f"https://rxddit.com/s/{share_id}",
+                mirror_url=f"https://{self.MIRROR_DOMAINS['reddit']}/s/{share_id}",
                 dedup_key=f"reddit-share:{share_id.lower()}",
             )
 
@@ -316,9 +401,9 @@ class Autolink(commands.Cog):
             if not REDDIT_ID_RE.fullmatch(post_id):
                 return None
 
-            return LinkMatch(
+            return self._make_link_match(
                 original_url=original_url,
-                mirror_url=f"https://rxddit.com/comments/{post_id}",
+                mirror_url=f"https://{self.MIRROR_DOMAINS['reddit']}/comments/{post_id}",
                 dedup_key=f"reddit:{post_id}",
             )
 
@@ -335,9 +420,9 @@ class Autolink(commands.Cog):
         if not REDDIT_ID_RE.fullmatch(post_id):
             return None
 
-        return LinkMatch(
+        return self._make_link_match(
             original_url=original_url,
-            mirror_url=f"https://rxddit.com/comments/{post_id}",
+            mirror_url=f"https://{self.MIRROR_DOMAINS['reddit']}/comments/{post_id}",
             dedup_key=f"reddit:{post_id}",
         )
 
@@ -353,12 +438,12 @@ class Autolink(commands.Cog):
                 return None
 
             watch_id = path_parts[0].strip()
-            if not watch_id:
+            if not self._valid_facebook_id(watch_id):
                 return None
 
-            return LinkMatch(
+            return self._make_link_match(
                 original_url=original_url,
-                mirror_url=f"https://www.facebed.com/share/v/{watch_id}",
+                mirror_url=f"https://{self.MIRROR_DOMAINS['facebook']}/share/v/{watch_id}",
                 dedup_key=f"facebook-watch:{watch_id.lower()}",
             )
 
@@ -367,75 +452,103 @@ class Autolink(commands.Cog):
 
         first = path_parts[0].lower()
 
-        # /watch/?v=<id> and /watch/live/?v=<id>
-        if first == "watch":
-            video_id = query.get("v", [None])[0]
-            if video_id:
-                return LinkMatch(
-                    original_url=original_url,
-                    mirror_url=f"https://www.facebed.com/watch?v={video_id}",
-                    dedup_key=f"facebook:{video_id.lower()}",
-                )
-            return None
+        handlers: dict[str, Callable[[], LinkMatch | None]] = {
+            "watch": lambda: self._facebook_watch_query_match(original_url, query),
+            "reel": lambda: self._facebook_reel_match(original_url, path_parts),
+            "videos": lambda: self._facebook_videos_match(original_url, path_parts),
+            "share": lambda: self._facebook_share_match(original_url, path_parts),
+        }
 
-        # /reel/<id>
-        if first == "reel" and len(path_parts) >= 2:
-            reel_id = path_parts[1].strip()
-            if reel_id:
-                return LinkMatch(
-                    original_url=original_url,
-                    mirror_url=f"https://www.facebed.com/share/r/{reel_id}",
-                    dedup_key=f"facebook-reel:{reel_id.lower()}",
-                )
-
-        # /videos/<id>
-        if first == "videos" and len(path_parts) >= 2:
-            video_id = path_parts[1].strip()
-            if video_id:
-                return LinkMatch(
-                    original_url=original_url,
-                    mirror_url=f"https://www.facebed.com/watch?v={video_id}",
-                    dedup_key=f"facebook:{video_id.lower()}",
-                )
-
-        # /share/r/<id>
-        if first == "share" and len(path_parts) >= 3 and path_parts[1].lower() == "r":
-            reel_id = path_parts[2].strip()
-            if reel_id:
-                return LinkMatch(
-                    original_url=original_url,
-                    mirror_url=f"https://www.facebed.com/share/r/{reel_id}",
-                    dedup_key=f"facebook-reel:{reel_id.lower()}",
-                )
-
-        # /share/v/<id>
-        if first == "share" and len(path_parts) >= 3 and path_parts[1].lower() == "v":
-            video_id = path_parts[2].strip()
-            if video_id:
-                return LinkMatch(
-                    original_url=original_url,
-                    mirror_url=f"https://www.facebed.com/share/v/{video_id}",
-                    dedup_key=f"facebook-watch:{video_id.lower()}",
-                )
-
-        # /share/<id>
-        if first == "share" and len(path_parts) >= 2 and path_parts[1].lower() not in {"r", "v"}:
-            share_id = path_parts[1].strip()
-            if share_id:
-                return LinkMatch(
-                    original_url=original_url,
-                    mirror_url=f"https://www.facebed.com/watch?v={share_id}",
-                    dedup_key=f"facebook:{share_id.lower()}",
-                )
+        handler = handlers.get(first)
+        if handler is not None:
+            match = handler()
+            if match is not None:
+                return match
 
         # /<user>/videos/<id>
         if len(path_parts) >= 3 and path_parts[-2].lower() == "videos":
             video_id = path_parts[-1].strip()
-            if video_id:
-                return LinkMatch(
+            if self._valid_facebook_id(video_id):
+                return self._make_link_match(
                     original_url=original_url,
-                    mirror_url=f"https://www.facebed.com/watch?v={video_id}",
+                    mirror_url=f"https://{self.MIRROR_DOMAINS['facebook']}/watch?v={video_id}",
                     dedup_key=f"facebook:{video_id.lower()}",
+                )
+
+        return None
+
+    def _facebook_watch_query_match(
+        self,
+        original_url: str,
+        query: dict[str, list[str]],
+    ) -> LinkMatch | None:
+        video_id = query.get("v", [None])[0]
+        if not self._valid_facebook_id(video_id):
+            return None
+
+        return self._make_link_match(
+            original_url=original_url,
+            mirror_url=f"https://{self.MIRROR_DOMAINS['facebook']}/watch?v={video_id}",
+            dedup_key=f"facebook:{video_id.lower()}",
+        )
+
+    def _facebook_reel_match(self, original_url: str, path_parts: list[str]) -> LinkMatch | None:
+        if len(path_parts) < 2:
+            return None
+
+        reel_id = path_parts[1].strip()
+        if not self._valid_facebook_id(reel_id):
+            return None
+
+        return self._make_link_match(
+            original_url=original_url,
+            mirror_url=f"https://{self.MIRROR_DOMAINS['facebook']}/share/r/{reel_id}",
+            dedup_key=f"facebook-reel:{reel_id.lower()}",
+        )
+
+    def _facebook_videos_match(self, original_url: str, path_parts: list[str]) -> LinkMatch | None:
+        if len(path_parts) < 2:
+            return None
+
+        video_id = path_parts[1].strip()
+        if not self._valid_facebook_id(video_id):
+            return None
+
+        return self._make_link_match(
+            original_url=original_url,
+            mirror_url=f"https://{self.MIRROR_DOMAINS['facebook']}/watch?v={video_id}",
+            dedup_key=f"facebook:{video_id.lower()}",
+        )
+
+    def _facebook_share_match(self, original_url: str, path_parts: list[str]) -> LinkMatch | None:
+        # /share/r/<id>
+        if len(path_parts) >= 3 and path_parts[1].lower() == "r":
+            reel_id = path_parts[2].strip()
+            if self._valid_facebook_id(reel_id):
+                return self._make_link_match(
+                    original_url=original_url,
+                    mirror_url=f"https://{self.MIRROR_DOMAINS['facebook']}/share/r/{reel_id}",
+                    dedup_key=f"facebook-reel:{reel_id.lower()}",
+                )
+
+        # /share/v/<id>
+        if len(path_parts) >= 3 and path_parts[1].lower() == "v":
+            video_id = path_parts[2].strip()
+            if self._valid_facebook_id(video_id):
+                return self._make_link_match(
+                    original_url=original_url,
+                    mirror_url=f"https://{self.MIRROR_DOMAINS['facebook']}/share/v/{video_id}",
+                    dedup_key=f"facebook-watch:{video_id.lower()}",
+                )
+
+        # /share/<id>
+        if len(path_parts) >= 2 and path_parts[1].lower() not in {"r", "v"}:
+            share_id = path_parts[1].strip()
+            if self._valid_facebook_id(share_id):
+                return self._make_link_match(
+                    original_url=original_url,
+                    mirror_url=f"https://{self.MIRROR_DOMAINS['facebook']}/watch?v={share_id}",
+                    dedup_key=f"facebook:{share_id.lower()}",
                 )
 
         return None
@@ -447,7 +560,15 @@ class Autolink(commands.Cog):
 
         chunks = self._chunk_links_with_single_footer(links, message.jump_url)
         if not chunks:
+            logger.debug("No mirror chunks generated for message %s", message.id)
             return False
+
+        logger.debug(
+            "Sending %d mirror chunk(s) for message=%s guild=%s",
+            len(chunks),
+            message.id,
+            getattr(message.guild, "id", None),
+        )
 
         try:
             for chunk in chunks:
@@ -463,7 +584,7 @@ class Autolink(commands.Cog):
             return False
 
         except discord.HTTPException:
-            logger.exception("Failed to send mirror reply")
+            logger.exception("Failed to send mirror reply for message %s", message.id)
             return False
 
     async def _suppress_embeds_if_possible(self, message: discord.Message, can_manage_messages: bool) -> None:
@@ -529,12 +650,17 @@ class Autolink(commands.Cog):
                 if not self._is_processed(guild_id, link.dedup_key, now)
             ]
 
+            if not fresh_links:
+                logger.debug(
+                    "All %d link(s) already processed in guild=%s within TTL",
+                    len(links),
+                    guild_id,
+                )
+                return
+
             # Mark links before sending to reduce duplicate replies under concurrency.
             for link in fresh_links:
                 self._mark_processed(guild_id, link.dedup_key, now)
-
-        if not fresh_links:
-            return
 
         sent = await self._send_mirrors(message, fresh_links)
         if not sent:
