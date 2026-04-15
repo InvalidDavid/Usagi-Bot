@@ -35,8 +35,8 @@ v2 components builder website that can help to understand it better: https://dis
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-Simply rewritten and up to date code with many more featuers manga bot which got as well modernized, forked from: 
-[![Github][forked-shield]][forked-url].
+Simply rewritten and up to date code with many more featuers manga bot which got as well modernized, forked from:
+- [![Github][forked-shield]][forked-url]
 
 ...
 
@@ -98,7 +98,7 @@ This is an example of how to list things you need to use the software and how to
 > [!NOTE]
 > - Use python 3.13 not 3.14!
 > - Need help? or got any question please contact me over Discord or Telegram.
-> - [![Telegram][telegram-shield]][telegram-url][![Discord][dme-shield]][dme-url]
+> - [![Telegram][telegram-shield]][telegram-url]   [![Discord][dme-shield]][dme-url]
 
 
 <!-- MARKDOWN LINKS & IMAGES -->
