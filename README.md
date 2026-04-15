@@ -36,7 +36,8 @@ v2 components builder website that can help to understand it better: https://dis
 ## About The Project
 
 Simply rewritten and up to date code with many more featuers manga bot which got as well modernized, forked from:
-- [![Github][forked-shield]][forked-url]
+
+[![Github][forked-shield]][forked-url]
 
 ...
 
