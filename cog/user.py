@@ -138,17 +138,17 @@ class User(commands.Cog):
         seconds = int(delta.total_seconds())
 
         if seconds < 60:
-            return f"vor {seconds} seconds"
+            return f"{seconds} seconds ago"
         elif seconds < 3600:
-            return f"vor {seconds // 60} minutes"
+            return f"{seconds // 60} minutes ago"
         elif seconds < 86400:
-            return f"vor {seconds // 3600} hours"
+            return f"{seconds // 3600} hours ago"
         elif seconds < 2592000:
-            return f"vor {seconds // 86400} days"
+            return f"{seconds // 86400} days ago"
         elif seconds < 31536000:
-            return f"vor {seconds // 2592000} months"
+            return f"{seconds // 2592000} months ago"
         else:
-            return f"vor {seconds // 31536000} years"
+            return f"{seconds // 31536000} years ago"
 
 
     @slash_command(name="about", description="Detailed stats about the bot.")
