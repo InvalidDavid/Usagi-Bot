@@ -114,7 +114,7 @@ This is an example of how to list things you need to use the software and how to
 [issues-url]: https://github.com/InvalidDavid/Usagi-Bot/issues
 [license-shield]:https://img.shields.io/github/license/InvalidDavid/Usagi-Bot.svg?style=for-the-badge
 [license-url]: https://github.com/InvalidDavid/Usagi-Bot/blob/main/LICENSE
-[discord-shield]: https://img.shields.io/discord/898363402467045416?style=for-the-badge&logo=discord&label=Discord&color=5865F2
+[discord-shield]: https://img.shields.io/discord/1484655684879519885?style=for-the-badge&logo=discord&label=Discord&color=5865F2
 [discord-url]: https://discord.gg/FRvn4X2Q5y
 [forked-shield]: https://img.shields.io/badge/-Github-black.svg?style=for-the-badge&logo=github&colorB=555
 [forked-url]: https://github.com/KotatsuApp/Emanon-GO
