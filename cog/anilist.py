@@ -1,155 +1,235 @@
 from utils.imports import *
 
-
 class AniList(commands.Cog):
+    ANILIST_API_URL = "https://graphql.anilist.co"
+    ANILIST_LOGO_URL = "https://anilist.co/img/logo_al.png"
+    DEFAULT_EMBED_COLOR = discord.Color.embed_background()
+    REQUEST_TIMEOUT_SECONDS = 10
+    MAX_DESCRIPTION_WORDS = 45
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def search_anilist(self, name, type):
+    async def search_anilist(self, name: str, media_type: str) -> dict | None:
         query = """
         query ($search: String!, $type: MediaType) {
           Page(page: 1, perPage: 10) {
             media(search: $search, type: $type, sort: POPULARITY_DESC) {
               id
               siteUrl
-              title { romaji english native }
+              title {
+                romaji
+                english
+                native
+              }
               description(asHtml: true)
               genres
-              coverImage { large color }
+              coverImage {
+                large
+                color
+              }
               format
               averageScore
-              startDate { year month day }
+              startDate {
+                year
+                month
+                day
+              }
             }
           }
         }
         """
 
-        variables = {
-            "search": name,
-            "type": type
+        payload = {
+            "query": query,
+            "variables": {
+                "search": name,
+                "type": media_type,
+            },
         }
 
-        r = requests.post(
-            "https://graphql.anilist.co",
-            json={"query": query, "variables": variables},
-            timeout=10
-        )
+        timeout = aiohttp.ClientTimeout(total=self.REQUEST_TIMEOUT_SECONDS)
 
-        if r.status_code != 200:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(self.ANILIST_API_URL, json=payload) as response:
+                    if response.status != 200:
+                        return None
+
+                    body = await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return None
 
-        data = r.json().get("data", {}).get("Page", {}).get("media")
-
-        if not data:
+        if not isinstance(body, dict):
             return None
 
-        m = data[0]
+        media_items = body.get("data", {}).get("Page", {}).get("media")
+        if not isinstance(media_items, list) or not media_items:
+            return None
+
+        media = media_items[0]
+        if not isinstance(media, dict):
+            return None
+
+        title_data = media.get("title")
+        if not isinstance(title_data, dict):
+            title_data = {}
 
         title = (
-            m["title"]["english"]
-            or m["title"]["romaji"]
-            or m["title"]["native"]
+            title_data.get("english")
+            or title_data.get("romaji")
+            or title_data.get("native")
+            or "Unknown Title"
         )
 
-        sd = m.get("startDate", {})
+        start_date_data = media.get("startDate")
+        if not isinstance(start_date_data, dict):
+            start_date_data = {}
 
-        year = sd.get("year")
-        month = sd.get("month") or 1
-        day = sd.get("day") or 1
+        year = start_date_data.get("year")
+        month = start_date_data.get("month") or 1
+        day = start_date_data.get("day") or 1
 
         start_date = None
         if year:
             start_date = f"{year}-{month:02d}-{day:02d}"
 
+        cover_image = media.get("coverImage")
+        if not isinstance(cover_image, dict):
+            cover_image = {}
+
+        media_id = media.get("id")
+        cover_url = cover_image.get("large")
+        if not cover_url and media_id:
+            cover_url = f"https://img.anili.st/media/{media_id}"
+
+        genres = media.get("genres")
+        if not isinstance(genres, list):
+            genres = []
+
         return {
-            "id": m["id"],
+            "id": media_id,
             "title": title,
-            "url": m["siteUrl"],
-            "desc": m.get("description", ""),
-            "genres": m.get("genres", []),
-            "cover": f"https://img.anili.st/media/{m['id']}",
-            "format": m.get("format"),
-            "score": m.get("averageScore"),
-            "color": m.get("coverImage", {}).get("color"),
-            "start_date": start_date
+            "url": media.get("siteUrl"),
+            "desc": media.get("description") or "",
+            "genres": genres,
+            "cover": cover_url,
+            "format": media.get("format") or "Unknown",
+            "score": media.get("averageScore"),
+            "color": cover_image.get("color"),
+            "start_date": start_date,
         }
 
-    def clean_description(self, text): # removes html code
+    @staticmethod
+    def clean_description(text: str) -> str:
+        # AniList returns HTML here, so normalize the common tags first.
         if not text:
             return "No description available."
 
-        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-        text = re.sub(r"</?i>", "", text, flags=re.I)
+        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"</p>\s*<p>", "\n\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?p>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?(?:i|em|b|strong)>", "", text, flags=re.IGNORECASE)
         text = re.sub(r"<[^>]+>", "", text)
+        text = (
+            text.replace("&amp;", "&")
+            .replace("&quot;", '"')
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+        )
+        text = re.sub(r"\n{3,}", "\n\n", text)
 
-        return text.strip()
+        cleaned = text.strip()
+        return cleaned or "No description available."
 
-    def truncate_description(self, text, url, max_words=45): # how many words it can have in the embed till its stops
+    @staticmethod
+    def truncate_description(text: str, url: str | None, max_words: int = 45) -> str:
         words = text.split()
 
         if len(words) <= max_words:
             return text
 
         short = " ".join(words[:max_words])
+        if url:
+            return f"{short}... [(more)]({url})"
+        return f"{short}..."
 
-        return f"{short}... [(more)]({url})"
+    @staticmethod
+    def format_start_date(start_date: str | None) -> str:
+        if not start_date:
+            return "Unknown"
 
-    @slash_command(name="search", description="Search Anime or Manga on AniList")
+        try:
+            dt = datetime.strptime(start_date, "%Y-%m-%d")
+            return dt.strftime("%d %B, %Y")
+        except ValueError:
+            return start_date
+
+    @staticmethod
+    def parse_embed_color(color_hex: str | None) -> discord.Color:
+        if not color_hex:
+            return AniList.DEFAULT_EMBED_COLOR
+
+        try:
+            return discord.Color(int(color_hex.lstrip("#"), 16))
+        except ValueError:
+            return AniList.DEFAULT_EMBED_COLOR
+
+    def build_embed(self, media: dict) -> discord.Embed:
+        date_text = self.format_start_date(media.get("start_date"))
+        desc = self.clean_description(media.get("desc", ""))
+        desc = self.truncate_description(desc, media.get("url"), self.MAX_DESCRIPTION_WORDS)
+        genres = ", ".join(media.get("genres", [])) if media.get("genres") else "Unknown"
+        color = self.parse_embed_color(media.get("color"))
+
+        description_parts = [f"*{genres}*"]
+        if media.get("score") is not None:
+            description_parts.append(f"**Score:** {media['score']}/100")
+        description_parts.append(desc)
+
+        embed = discord.Embed(
+            title=media.get("title", "Unknown Title"),
+            url=media.get("url"),
+            description="\n\n".join(description_parts),
+            color=color,
+        )
+
+        if media.get("cover"):
+            embed.set_image(url=media["cover"])
+
+        embed.set_footer(
+            text=f"AniList • {media.get('format', 'Unknown')} • {date_text}",
+            icon_url=self.ANILIST_LOGO_URL,
+        )
+
+        return embed
+
+    @slash_command(name="search", description="Search anime or manga on AniList")
     async def search(
         self,
         ctx: discord.ApplicationContext,
-        type: Option(
+        media_type: Option(
             str,
             "Choose type",
             choices=[
                 OptionChoice("Anime", "ANIME"),
-                OptionChoice("Manga", "MANGA")
-            ]
+                OptionChoice("Manga", "MANGA"),
+            ],
         ),
-        title: Option(str, "Anime or Manga name"),
-    ):
-
+        title: Option(str, "Anime or manga name"),
+    ) -> None:
         await ctx.defer()
 
-        media = self.search_anilist(title, type)
+        media = await self.search_anilist(title, media_type)
 
         if not media:
-            await ctx.respond("No results found.")
+            await ctx.followup.send("No results found.")
             return
 
-        if media["start_date"]:
-            try:
-                dt = datetime.strptime(media["start_date"], "%Y-%m-%d")
-                date_text = dt.strftime("%d %B, %Y")
-            except:
-                date_text = media["start_date"]
-        else:
-            date_text = "Unknown"
-
-        desc = self.clean_description(media["desc"])
-        desc = self.truncate_description(desc, media["url"], 45)
-
-        genres = ", ".join(media["genres"]) if media["genres"] else "Unknown"
-
-        color_hex = media["color"] or "#2f3136"
-        color = int(color_hex.lstrip("#"), 16)
-
-        embed = discord.Embed(
-            title=media["title"],
-            url=media["url"],
-            description=f"*{genres}*\n\n{desc}",
-            color=color
-        )
-
-        embed.set_image(url=media["cover"])
-
-        embed.set_footer(
-            text=f"AniList • {media['format']} • {date_text}",
-            icon_url="https://anilist.co/img/logo_al.png"
-        )
-
-        await ctx.respond(embed=embed)
+        embed = self.build_embed(media)
+        await ctx.followup.send(embed=embed)
 
 
-def setup(bot):
+def setup(bot: commands.Bot) -> None:
     bot.add_cog(AniList(bot))
