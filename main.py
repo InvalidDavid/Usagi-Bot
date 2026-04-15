@@ -1,9 +1,16 @@
 from utils.imports import *
 from utils.secrets import GUILDS_ID, OWNER, TOKEN
 
-# ---------------- LOGGING ----------------
-os.makedirs("utils/error", exist_ok=True)
+# ---------------- PATHS ----------------
+UTILS_DIR = "utils"
+ERROR_DIR = os.path.join(UTILS_DIR, "error")
+DATA_DIR = "Data"
 
+for directory in (UTILS_DIR, ERROR_DIR, DATA_DIR):
+    if not os.path.isdir(directory):
+        os.makedirs(directory, exist_ok=True)
+
+# ---------------- LOGGING ----------------
 logger = logging.getLogger("bot")
 logger.setLevel(logging.INFO)
 logger.propagate = False
@@ -19,7 +26,7 @@ console_handler.setFormatter(formatter)
 
 # reset every restart
 file_handler = logging.FileHandler(
-    "utils/error/bot.log",
+    os.path.join(ERROR_DIR, "bot.log"),
     mode="w",
     encoding="utf-8"
 )
@@ -27,7 +34,10 @@ file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
 
 # create only if an actual error happens
-error_filename = f"utils/error/crash_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+error_filename = os.path.join(
+    ERROR_DIR,
+    f"crash_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+)
 error_handler = logging.FileHandler(
     error_filename,
     mode="w",
@@ -54,46 +64,46 @@ if not discord_logger.handlers:
 
 
 # ---------------- MOBILE STATUS ----------------
-#  added a monkey patching, so I can get the mobile status on the bot
-# if you don't want that you can remove the function from marking
-# last tested on py-cord version 2.7.2
-# its Undocumented in the ToS so its in the gray zone, only issue can happend if the libary in this case py-cord patches it
+# added a monkey patch so the bot can show a mobile status.
+# remove this if you do not want that behavior.
+# last tested on py-cord 2.7.2
 original_identify = discord.gateway.DiscordWebSocket.identify
+
 
 async def patched_identify(self):
     payload = {
-        'op': self.IDENTIFY,
-        'd': {
-            'token': self.token,
-            'properties': {
-                '$os': 'Android',
-                '$browser': 'Discord Android',
-                '$device': 'Android',
-                '$referrer': '',
-                '$referring_domain': ''
+        "op": self.IDENTIFY,
+        "d": {
+            "token": self.token,
+            "properties": {
+                "$os": "Android",
+                "$browser": "Discord Android",
+                "$device": "Android",
+                "$referrer": "",
+                "$referring_domain": ""
             },
-            'compress': True,
-            'large_threshold': 250,
-            'v': 3
+            "compress": True,
+            "large_threshold": 250,
+            "v": 3
         }
     }
 
-    if hasattr(self, 'shard_id') and self.shard_id is not None:
-        payload['d']['shard'] = [self.shard_id, getattr(self, 'shard_count', 1)]
+    if hasattr(self, "shard_id") and self.shard_id is not None:
+        payload["d"]["shard"] = [self.shard_id, getattr(self, "shard_count", 1)]
 
-    if hasattr(self, '_connection') and self._connection:
-        intents = getattr(self._connection, 'intents', None)
+    if hasattr(self, "_connection") and self._connection:
+        intents = getattr(self._connection, "intents", None)
         if intents:
-            payload['d']['intents'] = intents.value
+            payload["d"]["intents"] = intents.value
 
-        presence = getattr(self._connection, '_presence', None)
+        presence = getattr(self._connection, "_presence", None)
         if presence:
-            payload['d']['presence'] = presence
+            payload["d"]["presence"] = presence
 
-    await self.send_as_json(payload)  # sends modified payload
+    await self.send_as_json(payload)
 
-discord.gateway.DiscordWebSocket.identify = patched_identify # apply
 
+discord.gateway.DiscordWebSocket.identify = patched_identify
 # ---------------------------------------
 
 
@@ -162,16 +172,18 @@ async def status_task() -> None:
 
     status_task.index = (status_task.index + 1) % len(statuses)
 
+
 @status_task.before_loop
 async def before_status_task() -> None:
     await bot.wait_until_ready()
 
-@bot.command(description="Force to load or reload all Slash commands")
+
+@bot.command(description="Force load or reload all slash commands")
 @commands.is_owner()
 async def sync(ctx):
     await bot.sync_commands(force=True)
     logger.info(f"{datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
-    await ctx.reply("Slash-Commands are now synced, wait for a couple seconds before using a Slash Command!")
+    await ctx.reply("Slash commands are now synced. Wait a few seconds before using them.")
 
 
 if __name__ == "__main__":
