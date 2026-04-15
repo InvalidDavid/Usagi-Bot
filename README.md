@@ -35,7 +35,8 @@ v2 components builder website that can help to understand it better: https://dis
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-Simply rewritten and up to date code with many more featuers manga bot which got as well modernized, forked from: [![Github][forked-shield]][forked-url].
+Simply rewritten and up to date code with many more featuers manga bot which got as well modernized, forked from: 
+[![Github][forked-shield]][forked-url].
 
 ...
 
@@ -70,7 +71,7 @@ This is an example of how to list things you need to use the software and how to
 1. Get a the essential data / tokesn for the `.env` from [Discord Developer Site](https://discord.com/developers/home)
 2. Clone the repo
    ```sh
-   git clone https://github.com/InvalidDavid/Usagi-Bot.git
+   git clone https://github.com/InvalidDavid/Usagi-Bot.git && cd Usagi-Bot
    ```
 3. Install packages (Python 3.13 not 3.14 due to compatibility issues)
    ```sh
@@ -81,9 +82,6 @@ This is an example of how to list things you need to use the software and how to
     TOKEN=#bot token
     GUILDS=#guild id
     OWNER=#same principle as below
-    FORUM_ID=# WORKS ONLY FOR ONE SINGLE CHANNEL NOT MULTIPLE ONES
-    MOD_ROLE_IDS=
-    ADMIN_ROLE_IDS= # role ids, if multiple ones split them with a ,
     WEBHOOK_URL= #webhook url, not required
     ERROREMOJI="❌" # error emoji
     SUPPORT_SERVER="https://github.com/InvalidDavid/Usagi-Bot"
@@ -100,8 +98,7 @@ This is an example of how to list things you need to use the software and how to
 > [!NOTE]
 > - Use python 3.13 not 3.14!
 > - Need help? or got any question please contact me over Discord or Telegram.
-[![Telegram][telegram-shield]][telegram-url]
-[![Discord][dme-shield]][dme-url]
+> - [![Telegram][telegram-shield]][telegram-url][![Discord][dme-shield]][dme-url]
 
 
 <!-- MARKDOWN LINKS & IMAGES -->
@@ -116,7 +113,7 @@ This is an example of how to list things you need to use the software and how to
 [issues-url]: https://github.com/InvalidDavid/Usagi-Bot/issues
 [license-shield]:https://img.shields.io/github/license/InvalidDavid/Usagi-Bot.svg?style=for-the-badge
 [license-url]: https://github.com/InvalidDavid/Usagi-Bot/blob/main/LICENSE
-[discord-shield]: https://img.shields.io/badge/-Discord-black.svg?style=for-the-badge&logo=discord&colorB=555
+[discord-shield]: https://img.shields.io/discord/898363402467045416?style=for-the-badge&logo=discord&label=Discord&color=5865F2
 [discord-url]: https://discord.gg/FRvn4X2Q5y
 [forked-shield]: https://img.shields.io/badge/-Github-black.svg?style=for-the-badge&logo=github&colorB=555
 [forked-url]: https://github.com/KotatsuApp/Emanon-GO
