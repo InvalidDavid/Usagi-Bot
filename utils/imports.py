@@ -1,6 +1,6 @@
 import discord
 import discord.gateway
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.commands import slash_command, SlashCommandGroup, Option, OptionChoice
 from discord.ui import View, Button, Select
 from discord.utils import format_dt
@@ -24,7 +24,7 @@ from io import BytesIO
 import io
 import json
 import logging
-from typing import Optional, Union
+from typing import Optional, Union, Iterable
 
 
 from discord import (
@@ -57,6 +57,7 @@ __all__ = [
     'ApplicationContext', 'ButtonStyle', 'Color', 'File', 'Interaction',
     'SeparatorSpacingSize', 'User', 'ActionRow', 'UIButton', 'Container',
     'DesignerView', 'MediaGallery', 'Section', 'Separator', 'TextDisplay',
-    'Thumbnail', 'io', "json", "logging", "Optional", "Union",
+    'Thumbnail', 'io', "json", "logging", "Optional", "Union", "tasks", "Iterable",
+
 
 ]
