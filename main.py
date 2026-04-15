@@ -56,6 +56,8 @@ if not discord_logger.handlers:
 # ---------------- MOBILE STATUS ----------------
 #  added a monkey patching, so I can get the mobile status on the bot
 # if you don't want that you can remove the function from marking
+# last tested on py-cord version 2.7.2
+# its Undocumented in the ToS so its in the gray zone, only issue can happend if the libary in this case py-cord patches it
 original_identify = discord.gateway.DiscordWebSocket.identify
 
 async def patched_identify(self):
@@ -88,9 +90,9 @@ async def patched_identify(self):
         if presence:
             payload['d']['presence'] = presence
 
-    await self.send_as_json(payload)
+    await self.send_as_json(payload)  # sends modified payload
 
-discord.gateway.DiscordWebSocket.identify = patched_identify
+discord.gateway.DiscordWebSocket.identify = patched_identify # apply
 
 # ---------------------------------------
 
@@ -106,7 +108,7 @@ bot = commands.Bot(
 
 
 @bot.event
-async def on_ready():
+async def on_ready() -> None:
     guilds = len(bot.guilds)
     users = sum(
         1 for g in bot.guilds
@@ -139,19 +141,30 @@ async def on_ready():
 
     logger.info(f"╚{'═' * (width + 2)}╝\n")
 
-    a1 = Activity(
-        type=ActivityType.custom,
-        state="sth new? check bio"
-    )
-    # custom activity instead of saying "playing ..." it just says the text directly like a satus
-    a2 = discord.Game(name=f"{users:,} users")
-    await bot.change_presence(
-        status=discord.Status.online,
-        activity=a1
-    )
-
     logger.info("Bot successfully started.")
+    if not status_task.is_running():
+        status_task.start()
 
+
+@tasks.loop(seconds=60)
+async def status_task() -> None:
+    if not hasattr(status_task, "index"):
+        status_task.index = 0
+
+    statuses = [
+        (discord.Status.dnd, discord.Activity(type=discord.ActivityType.custom, state="©️ made by InvalidDavid")),
+        (discord.Status.online, discord.Activity(type=discord.ActivityType.custom, state="🏆 Check my profile out!")),
+        (discord.Status.online, discord.Activity(type=discord.ActivityType.custom, state=f"🏓 Ping: {round(bot.latency * 1000)}ms")),
+    ]
+
+    status, activity = statuses[status_task.index]
+    await bot.change_presence(status=status, activity=activity)
+
+    status_task.index = (status_task.index + 1) % len(statuses)
+
+@status_task.before_loop
+async def before_status_task() -> None:
+    await bot.wait_until_ready()
 
 @bot.command(description="Force to load or reload all Slash commands")
 @commands.is_owner()
