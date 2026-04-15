@@ -1,9 +1,4 @@
-from collections import defaultdict
 from dataclasses import dataclass
-import heapq
-from typing import Callable, TypeAlias
-from urllib.parse import ParseResult, parse_qs, urlparse
-
 from utils.imports import *
 
 logger = logging.getLogger("bot.autolink")
