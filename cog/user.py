@@ -122,34 +122,12 @@ class User(commands.Cog):
         self.MAX_FIELDS_PER_EMBED = 20
         self.start_time = datetime.now(timezone.utc)
 
-
+    # how long bot is online
     def format_timedelta(self, delta: timedelta) -> str:
         days = delta.days
         hours, remainder = divmod(delta.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         return f"🗓️ {days}d ⏰ {hours}h ⏳ {minutes}m ⏲️ {seconds}s"
-
-    def time_ago(self, dt: datetime) -> str:
-        if dt is None:
-            return "Not available"
-        if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        delta = datetime.now(timezone.utc) - dt
-        seconds = int(delta.total_seconds())
-
-        if seconds < 60:
-            return f"{seconds} seconds ago"
-        elif seconds < 3600:
-            return f"{seconds // 60} minutes ago"
-        elif seconds < 86400:
-            return f"{seconds // 3600} hours ago"
-        elif seconds < 2592000:
-            return f"{seconds // 86400} days ago"
-        elif seconds < 31536000:
-            return f"{seconds // 2592000} months ago"
-        else:
-            return f"{seconds // 31536000} years ago"
-
 
     @slash_command(name="about", description="Detailed stats about the bot.")
     async def about(self, ctx: discord.ApplicationContext):
@@ -351,12 +329,6 @@ class User(commands.Cog):
                 new_index += 1
 
         return final_embeds, final_page_info
-
-
-
-    # ---------------------------------------
-
-
 
 def setup(bot):
     bot.add_cog(User(bot))
