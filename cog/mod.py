@@ -21,9 +21,16 @@ class ModC(commands.Cog):
     mod = SlashCommandGroup("mod", "Mod commands")
     forum = SlashCommandGroup("forum", "Forum management commands")
 
+    # If you want in a specific thread channel to have a automatic message that pins and sends a embed then u can remove the # with "strg + /" or "ctrl + /" dont forget to mark it.
+    # and change in THREADID the correct channel id, else u can complelty remove it
+
     # @commands.Cog.listener()
     # async def on_thread_create(self, thread: discord.Thread):
     #     if not isinstance(thread.parent, discord.ForumChannel):
+    #         return
+    #
+    #     THREADID = 123456789012345678
+    #     if thread.parent.id != THREADID:
     #         return
     #
     #     pin_notice = None
