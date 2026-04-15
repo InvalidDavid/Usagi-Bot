@@ -1,8 +1,6 @@
 from utils.imports import *
 from utils.secrets import WEBHOOK_URL, ERROREMOJI, SUPPORT_SERVER
 
-#   TEST VERSION MIGHT REVERT BACK TO THE OLD CODE
-
 def cooldown_timestamp(seconds: float, show_absolute: bool = True) -> str:
     target_time = datetime.now(timezone.utc) + timedelta(seconds=seconds)
     relative = discord.utils.format_dt(target_time, style='R')
