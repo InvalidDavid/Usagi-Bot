@@ -74,7 +74,7 @@ class AniList(commands.Cog):
             "start_date": start_date
         }
 
-    def clean_description(self, text):
+    def clean_description(self, text): # removes html code
         if not text:
             return "No description available."
 
@@ -84,7 +84,7 @@ class AniList(commands.Cog):
 
         return text.strip()
 
-    def truncate_description(self, text, url, max_words=45):
+    def truncate_description(self, text, url, max_words=45): # how many words it can have in the embed till its stops
         words = text.split()
 
         if len(words) <= max_words:
