@@ -267,13 +267,6 @@ class Autolink(commands.Cog):
                     target = candidate
                     target_type = "video"
 
-            # Community post route.
-            elif first == "post" and len(path_parts) >= 2:
-                candidate = path_parts[1].strip()
-                if candidate:
-                    target = candidate
-                    target_type = "post"
-
         if target is None or target_type is None:
             return None
 
