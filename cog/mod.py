@@ -1,5 +1,9 @@
 from utils.imports import *
 
+TAG_CHANGE_LIMIT = 2
+TAG_CHANGE_WINDOW_SECONDS = 300
+
+
 async def tag_thread(ctx: discord.AutocompleteContext):
     channel = ctx.interaction.channel
     if not isinstance(channel, discord.Thread):
@@ -9,17 +13,80 @@ async def tag_thread(ctx: discord.AutocompleteContext):
     if not isinstance(parent, discord.ForumChannel):
         return []
 
-    all_tags = [t.name for t in parent.available_tags]
-    value = ctx.value.lower()
-    return [t for t in all_tags if value in t.lower()][:25]
+    value = (ctx.value or "").lower().strip()
+    all_tags = [tag.name for tag in parent.available_tags]
+
+    if not value:
+        return all_tags[:25]
+
+    return [tag_name for tag_name in all_tags if value in tag_name.lower()][:25]
 
 
 class ModC(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._thread_tag_changes: dict[int, list[float]] = defaultdict(list)
+        self._thread_tag_change_lock = asyncio.Lock()
 
     mod = SlashCommandGroup("mod", "Mod commands")
     forum = SlashCommandGroup("forum", "Forum management commands")
+
+    def _command_mention(self, command_name: str) -> str:
+        for command in self.bot.application_commands:
+            cmd_id = getattr(command, "id", None)
+            cmd_name = getattr(command, "name", None)
+
+            if cmd_name == command_name and cmd_id:
+                return f"</{cmd_name}:{cmd_id}>"
+
+        return f"/{command_name}"
+
+    @staticmethod
+    def _get_forum_thread(channel: discord.abc.GuildChannel | discord.Thread | None) -> Optional[discord.Thread]:
+        if isinstance(channel, discord.Thread) and isinstance(channel.parent, discord.ForumChannel):
+            return channel
+        return None
+
+    @staticmethod
+    def _normalized_thread_name_without_prefix(name: str) -> str:
+        return re.sub(r"^\[.*?]\s*", "", name).strip()
+
+    @staticmethod
+    def _strip_lock_prefix(name: str) -> str:
+        return re.sub(r"^🔒\s*", "", name).strip()
+
+    async def _reserve_tag_change_slot(self, thread_id: int) -> tuple[bool, float]:
+        async with self._thread_tag_change_lock:
+            now = time.monotonic()
+            window_start = now - TAG_CHANGE_WINDOW_SECONDS
+
+            entries = [
+                ts for ts in self._thread_tag_changes.get(thread_id, [])
+                if ts > window_start
+            ]
+            self._thread_tag_changes[thread_id] = entries
+
+            if len(entries) >= TAG_CHANGE_LIMIT:
+                retry_after = max(0.0, entries[0] + TAG_CHANGE_WINDOW_SECONDS - now)
+                return False, retry_after
+
+            entries.append(now)
+            self._thread_tag_changes[thread_id] = entries
+            return True, now
+
+    async def _rollback_tag_change_slot(self, thread_id: int, reserved_at: float) -> None:
+        async with self._thread_tag_change_lock:
+            entries = self._thread_tag_changes.get(thread_id)
+            if not entries:
+                return
+
+            with contextlib.suppress(ValueError):
+                entries.remove(reserved_at)
+
+            if entries:
+                self._thread_tag_changes[thread_id] = entries
+            else:
+                self._thread_tag_changes.pop(thread_id, None)
 
     # If you want in a specific thread channel to have a automatic message that pins and sends a embed then u can remove the # with "strg + /" or "ctrl + /" dont forget to mark it.
     # and change in THREADID the correct channel id, else u can complelty remove it
@@ -29,7 +96,7 @@ class ModC(commands.Cog):
     #     if not isinstance(thread.parent, discord.ForumChannel):
     #         return
     #
-    #     THREADID = 123456789012345678
+    #     THREADID = 1488486275898933288
     #     if thread.parent.id != THREADID:
     #         return
     #
@@ -82,31 +149,33 @@ class ModC(commands.Cog):
     async def purge(self, ctx: discord.ApplicationContext, amount: int):
         await ctx.defer(ephemeral=True)
 
+        if ctx.guild is None:
+            await ctx.followup.send("This command can only be used in a server.", ephemeral=True)
+            return
+
         if amount < 1 or amount > 100:
-            return await ctx.followup.send(
-                "Amount must be between 1 and 100.",
-                ephemeral=True
-            )
+            await ctx.followup.send("Amount must be between 1 and 100.", ephemeral=True)
+            return
 
         channel = ctx.channel
-
         if not isinstance(channel, discord.TextChannel):
-            return await ctx.followup.send(
-                "This command can only be used in text channels.",
-                ephemeral=True
-            )
+            await ctx.followup.send("This command can only be used in text channels.", ephemeral=True)
+            return
 
-        if not channel.permissions_for(ctx.guild.me).manage_messages:
-            return await ctx.followup.send(
-                "I need `Manage Messages` permission.",
-                ephemeral=True
-            )
+        me = ctx.guild.me
+        if me is None:
+            await ctx.followup.send("Could not resolve my member object in this server.", ephemeral=True)
+            return
+
+        if not channel.permissions_for(me).manage_messages:
+            await ctx.followup.send("I need `Manage Messages` permission.", ephemeral=True)
+            return
 
         try:
-            to_delete = []
+            to_delete: list[discord.Message] = []
             cutoff = discord.utils.utcnow() - timedelta(days=14)
 
-            async for msg in channel.history(limit=amount * 5):
+            async for msg in channel.history(limit=min(amount * 5, 500)):
                 if len(to_delete) >= amount:
                     break
 
@@ -119,139 +188,209 @@ class ModC(commands.Cog):
                 to_delete.append(msg)
 
             if not to_delete:
-                return await ctx.followup.send(
-                    "No eligible messages found to delete. (Can`t delete messages that are older than 14 days)",
-                    ephemeral=True
+                await ctx.followup.send(
+                    "No eligible messages found to delete. Messages older than 14 days cannot be bulk deleted.",
+                    ephemeral=True,
                 )
+                return
 
-            await channel.delete_messages(to_delete)
+            if len(to_delete) == 1:
+                await to_delete[0].delete()
+            else:
+                await channel.delete_messages(to_delete)
 
-            deleted = to_delete
-            authors = {msg.author for msg in deleted}
+            authors = {msg.author.id for msg in to_delete}
             author_count = len(authors)
 
-            if deleted:
-                oldest_dt = min(deleted, key=lambda m: m.created_at).created_at.astimezone(timezone.utc)
-                newest_dt = max(deleted, key=lambda m: m.created_at).created_at.astimezone(timezone.utc)
+            oldest_dt = min(to_delete, key=lambda m: m.created_at).created_at.astimezone(timezone.utc)
+            newest_dt = max(to_delete, key=lambda m: m.created_at).created_at.astimezone(timezone.utc)
 
-                oldest_ts = int(oldest_dt.timestamp())
-                newest_ts = int(newest_dt.timestamp())
-            else:
-                oldest_ts = newest_ts = None
+            oldest_ts = int(oldest_dt.timestamp())
+            newest_ts = int(newest_dt.timestamp())
 
-            bot_count = sum(1 for m in deleted if m.author.bot)
-            user_count = len(deleted) - bot_count
+            bot_count = sum(1 for msg in to_delete if msg.author.bot)
+            user_count = len(to_delete) - bot_count
+
             await ctx.followup.send(
                 (
                     f"🧹 **Purge completed**\n"
-                    f"- Deleted: `{len(deleted)}` messages\n"
+                    f"- Deleted: `{len(to_delete)}` messages\n"
                     f"- Unique authors: `{author_count}`\n"
                     f"- Users: `{user_count}` | Bots: `{bot_count}`\n"
-                    f"- Time range: {f'<t:{oldest_ts}:F>' if oldest_ts else 'N/A'} → {f'<t:{newest_ts}:F>' if newest_ts else 'N/A'}\n"
+                    f"- Time range: <t:{oldest_ts}:F> → <t:{newest_ts}:F>"
                 ),
                 ephemeral=True,
                 delete_after=10,
             )
 
         except discord.Forbidden:
-            await ctx.followup.send(
-                "Missing permissions to delete messages.",
-                ephemeral=True
-            )
+            await ctx.followup.send("Missing permissions to delete messages.", ephemeral=True)
+        except discord.HTTPException:
+            await ctx.followup.send("Failed to delete messages due to a Discord API error.", ephemeral=True)
 
-        except discord.HTTPException as e:
-            await ctx.followup.send(
-                f"Failed to delete messages: {e}",
-                ephemeral=True
-            )
-
-        except Exception as e:
-            print(e)
-            await ctx.followup.send(
-                "Unexpected error occurred.",
-                ephemeral=True
-            )
-
-    @forum.command(description="Change a thread's tag (2 use per post limit)")
+    @forum.command(description="Change a thread's tag")
+    @commands.guild_only()
     @commands.has_permissions(manage_threads=True)
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def tag(
         self,
         ctx: discord.ApplicationContext,
-        tag: Option(str, "Select a tag", autocomplete=tag_thread)
+        tag: Option(str, "Select a tag", autocomplete=tag_thread),
     ):
         await ctx.defer(ephemeral=True)
 
-        thread = ctx.channel
-        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel):
+        thread = self._get_forum_thread(ctx.channel)
+        if thread is None:
             await ctx.followup.send("This command can only be used in a forum thread.", ephemeral=True)
+            return
+
+        reserved, value = await self._reserve_tag_change_slot(thread.id)
+        if not reserved:
+            retry_seconds = max(1, int(value) + 1)
+            await ctx.followup.send(
+                f"This thread already had {TAG_CHANGE_LIMIT} tag changes in the last 5 minutes. Try again in `{retry_seconds}s`.",
+                ephemeral=True,
+            )
             return
 
         forum_channel: discord.ForumChannel = thread.parent
         tag_obj = next((t for t in forum_channel.available_tags if t.name == tag), None)
-        if not tag_obj:
+
+        if tag_obj is None:
+            await self._rollback_tag_change_slot(thread.id, value)
             await ctx.followup.send("Tag not found.", ephemeral=True)
             return
 
-        nt = re.sub(r"^\[.*?]\s*", "", thread.name)
-        nt = f"[{tag_obj.name}] {nt}"
+        new_name = self._normalized_thread_name_without_prefix(thread.name)
+        new_name = f"[{tag_obj.name}] {new_name}"
 
-        await thread.edit(applied_tags=[tag_obj], name=nt)
-        await ctx.followup.send(f"Thread tag set to: {tag_obj.name}", ephemeral=True)
+        try:
+            await thread.edit(
+                applied_tags=[tag_obj],
+                name=new_name,
+                reason=f"Tag changed by {ctx.author} ({ctx.author.id})"
+            )
+            await ctx.followup.send(f"Thread tag set to: {tag_obj.name}", ephemeral=True)
+        except discord.Forbidden:
+            await self._rollback_tag_change_slot(thread.id, value)
+            await ctx.followup.send("I don't have permission to edit this thread.", ephemeral=True)
+        except discord.HTTPException:
+            await self._rollback_tag_change_slot(thread.id, value)
+            await ctx.followup.send("Failed to update the thread tag.", ephemeral=True)
+
+    @forum.command(name="reminder", description="Ping the thread owner to close the thread if it's done")
+    @commands.guild_only()
+    @commands.has_permissions(manage_threads=True)
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def reminder(self, ctx: discord.ApplicationContext):
+        await ctx.defer(ephemeral=True)
+
+        thread = self._get_forum_thread(ctx.channel)
+        if thread is None:
+            await ctx.followup.send("This command can only be used in a forum thread.", ephemeral=True)
+            return
+
+        if thread.owner_id is None:
+            await ctx.followup.send("This thread has no detectable owner.", ephemeral=True)
+            return
+
+        allowed_mentions = discord.AllowedMentions(everyone=False, roles=False, users=True)
+        close_mention = self._command_mention("close")
+
+        try:
+            await thread.send(
+                content=f"## <@{thread.owner_id}> Done with your help thread?\n> Please close your own help thread by using {close_mention}, if you dont have any questions anymore.",
+                allowed_mentions=allowed_mentions,
+            )
+            await ctx.followup.send("Reminder sent to the thread owner.", ephemeral=True)
+        except discord.Forbidden:
+            await ctx.followup.send("I don't have permission to send messages in this thread.", ephemeral=True)
+        except discord.HTTPException:
+            await ctx.followup.send("Failed to send the reminder.", ephemeral=True)
 
     @forum.command(name="close", description="Close the thread")
+    @commands.guild_only()
     @commands.has_permissions(manage_threads=True)
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def close_thread(self, ctx: discord.ApplicationContext):
-        thread = ctx.channel
-
-        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel):
-            await ctx.respond(
-                "This command can only be used in a forum thread.", ephemeral=True
-            )
-            return
-
-        new_name = re.sub(r"^🔒\s*", "", thread.name)
-        new_name = f"🔒 {new_name}"
-
-        await thread.send("Thread has been locked 🔒")
-        await ctx.respond(f"Closing thread {thread.name}", ephemeral=True)
-        await thread.edit(archived=True, locked=True, name=new_name)
-
-    @forum.command(name="unlock", description="Unlock a thread")
-    @commands.has_permissions(manage_threads=True)
-    @commands.cooldown(1, 10, commands.BucketType.user)
-    async def unlock_thread(
-        self,
-        ctx: discord.ApplicationContext
-    ):
-        thread = ctx.channel
-        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel):
+        thread = self._get_forum_thread(ctx.channel)
+        if thread is None:
             await ctx.respond("This command can only be used in a forum thread.", ephemeral=True)
             return
 
-        new_name = re.sub(r"^🔒\s*", "", thread.name)
+        new_name = self._strip_lock_prefix(thread.name)
+        new_name = f"🔒 {new_name}"
 
-        await thread.edit(archived=False, locked=False, name=new_name)
-        await ctx.respond(f"Thread '{thread.name}' unlocked.", ephemeral=True)
+        try:
+            await thread.send("Thread has been locked 🔒")
+            await thread.edit(
+                archived=True,
+                locked=True,
+                name=new_name,
+                reason=f"Thread closed by moderator {ctx.author} ({ctx.author.id})",
+            )
+            await ctx.respond(f"Closing thread `{thread.name}`", ephemeral=True)
+        except discord.Forbidden:
+            await ctx.respond("I don't have permission to close this thread.", ephemeral=True)
+        except discord.HTTPException:
+            await ctx.respond("Failed to close the thread.", ephemeral=True)
 
-    @commands.command(name="close", description="Close and archive your thread (author only)")
-    async def close(self, ctx):
-        thread = ctx.channel
+    @forum.command(name="unlock", description="Unlock a thread")
+    @commands.guild_only()
+    @commands.has_permissions(manage_threads=True)
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def unlock_thread(self, ctx: discord.ApplicationContext):
+        thread = self._get_forum_thread(ctx.channel)
+        if thread is None:
+            await ctx.respond("This command can only be used in a forum thread.", ephemeral=True)
+            return
 
-        if not isinstance(thread, discord.Thread) or not isinstance(thread.parent, discord.ForumChannel):
-            await ctx.reply("This command can only be used in a forum thread.")
+        new_name = self._strip_lock_prefix(thread.name)
+
+        try:
+            await thread.edit(
+                archived=False,
+                locked=False,
+                name=new_name,
+                reason=f"Thread unlocked by moderator {ctx.author} ({ctx.author.id})",
+            )
+            await ctx.respond(f"Thread `{thread.name}` unlocked.", ephemeral=True)
+        except discord.Forbidden:
+            await ctx.respond("I don't have permission to unlock this thread.", ephemeral=True)
+        except discord.HTTPException:
+            await ctx.respond("Failed to unlock the thread.", ephemeral=True)
+
+    @slash_command(name="close", description="Close and archive your thread (author only)")
+    @commands.guild_only()
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def close(self, ctx: discord.ApplicationContext):
+        thread = self._get_forum_thread(ctx.channel)
+        if thread is None:
+            await ctx.respond("This command can only be used in a forum thread.", ephemeral=True)
             return
 
         if ctx.author.id != thread.owner_id:
-            await ctx.reply("Only the thread author can close this thread.")
+            await ctx.respond("Only the thread author can close this thread.", ephemeral=True)
             return
 
-        new_name = re.sub(r"^🔒\s*", "", thread.name)
-        new_name = f"🔒 {new_name}"
+        now_utc = datetime.now(timezone.utc)
+        embed = discord.Embed(
+            description=f"Author has closed the thread: `{thread.name}`",
+            color=discord.Color.embed_background(),
+            timestamp=now_utc,
+        )
 
-        await ctx.reply("Thread closed and archived by author.")
-        await thread.edit(locked=False, archived=True, name=new_name)
+        try:
+            await ctx.respond(embed=embed, ephemeral=False)
+            await thread.edit(
+                locked=True,
+                archived=True,
+                reason=f"Thread closed by author {ctx.author} ({ctx.author.id})",
+            )
+        except discord.Forbidden:
+            await ctx.respond("I don't have permission to close this thread.", ephemeral=True)
+        except discord.HTTPException:
+            raise
 
 
 def setup(bot: commands.Bot):
