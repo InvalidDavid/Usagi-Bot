@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from utils.imports import *
 
 logger = logging.getLogger("bot.autolink")
@@ -276,7 +275,7 @@ class Autolink(commands.Cog):
         video_id, is_shorts, prefer_short_domain = parsed_target
 
         if prefer_short_domain:
-            mirror_url = f"https://{self.MIRROR_DOMAINS['youtube_short']}/{video_id}"
+            mirror_url = f"https://{self.MIRROR_DOMAINS['youtube_short']}/watch?v={video_id}"
             if is_shorts:
                 mirror_url += "?shorts"
         else:
