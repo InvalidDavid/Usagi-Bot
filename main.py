@@ -2,6 +2,7 @@ from utils.imports import *
 from utils.secrets import GUILDS_ID, OWNER, TOKEN
 
 # ---------------- PATHS ----------------
+# automaticlly creates folder on bot starts
 UTILS_DIR = "utils"
 ERROR_DIR = "error"
 DATA_DIR = "Data"
@@ -60,8 +61,6 @@ if not discord_logger.handlers:
     discord_logger.addHandler(console_handler)
     discord_logger.addHandler(file_handler)
     discord_logger.addHandler(error_handler)
-# -----------------------------------------
-
 
 # ---------------- MOBILE STATUS ----------------
 # added a monkey patch so the bot can show a mobile status.
@@ -108,107 +107,106 @@ discord.gateway.DiscordWebSocket.identify = patched_identify
 # ---------------------------------------
 
 
-bot = commands.Bot(
-    intents=discord.Intents.all(),
-    debug_guilds=GUILDS_ID,
-    sync_commands=True,
-    owner_ids=OWNER,
-    command_prefix="=",
-    help_command=None,
-)
-
-
-@bot.event
-async def on_ready() -> None:
-    guilds = len(bot.guilds)
-    users = sum(
-        1 for g in bot.guilds
-        for m in g.members
-        if not m.bot
+def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
+    bot = commands.Bot(
+        intents=discord.Intents.all(),
+        debug_guilds=GUILDS_ID,
+        sync_commands=True,
+        owner_ids=OWNER,
+        command_prefix="=",
+        help_command=None,
     )
-    bots = sum(
-        1 for g in bot.guilds
-        for m in g.members
-        if m.bot
-    )
-    ping = round(bot.latency * 1000)
-    slash_commands = len(bot.application_commands)
-    prefix_commands = len(bot.commands)
 
-    infos = [
-        f"Framework      : Pycord {discord.__version__}",
-        f"Ping           : {ping} ms",
-        f"Guilds         : {guilds}",
-        f"Users          : {users:,}",
-        f"Bots           : {bots:,}",
-        f"Slash Commands : {slash_commands}",
-        f"Prefix Commands: {prefix_commands}",
-    ]
+    @bot.event
+    async def on_ready() -> None:
+        guilds = len(bot.guilds)
+        users = sum(
+            1 for g in bot.guilds
+            for m in g.members
+            if not m.bot
+        )
+        bots = sum(
+            1 for g in bot.guilds
+            for m in g.members
+            if m.bot
+        )
+        ping = round(bot.latency * 1000)
+        slash_commands = len(bot.application_commands)
+        prefix_commands = len(bot.commands)
 
-    width = max(len(i) for i in infos)
-    logger.info(f"╔{'═' * (width + 2)}╗")
-    for line in infos:
-        logger.info(f"║ {line:<{width}} ║")
+        infos = [
+            f"Framework      : Pycord {discord.__version__}",
+            f"Ping           : {ping} ms",
+            f"Guilds         : {guilds}",
+            f"Users          : {users:,}",
+            f"Bots           : {bots:,}",
+            f"Slash Commands : {slash_commands}",
+            f"Prefix Commands: {prefix_commands}",
+        ]
 
-    logger.info(f"╚{'═' * (width + 2)}╝\n")
+        width = max(len(i) for i in infos)
+        logger.info(f"╔{'═' * (width + 2)}╗")
+        for line in infos:
+            logger.info(f"║ {line:<{width}} ║")
 
-    logger.info("Bot successfully started.")
-    if not status_task.is_running():
-        status_task.start()
+        logger.info(f"╚{'═' * (width + 2)}╝\n")
 
+        logger.info("Bot successfully started.")
+        if not status_task.is_running():
+            status_task.start()
 
+    @tasks.loop(seconds=60)
+    async def status_task() -> None:
+        if not hasattr(status_task, "index"):
+            status_task.index = 0
 
-@tasks.loop(seconds=60)
-async def status_task() -> None:
-    if not hasattr(status_task, "index"):
-        status_task.index = 0
+        statuses = [
+            discord.Activity(type=discord.ActivityType.custom, state="©️ made by InvalidDavid"),
+            discord.Activity(type=discord.ActivityType.custom, state="🏆 Check my profile out!"),
+            discord.Activity(type=discord.ActivityType.custom, state=f"🏓 Ping: {round(bot.latency * 1000)}ms"),
+        ]
 
-    statuses = [
-        (discord.Activity(type=discord.ActivityType.custom, state="©️ made by InvalidDavid")),
-        (discord.Activity(type=discord.ActivityType.custom, state="🏆 Check my profile out!")),
-        (discord.Activity(type=discord.ActivityType.custom, state=f"🏓 Ping: {round(bot.latency * 1000)}ms")),
-    ]
+        activity = statuses[status_task.index]
+        await bot.change_presence(activity=activity)
 
-    activity = statuses[status_task.index]
-    await bot.change_presence(activity=activity)
+        status_task.index = (status_task.index + 1) % len(statuses)
 
-    status_task.index = (status_task.index + 1) % len(statuses)
+    @status_task.before_loop
+    async def before_status_task() -> None:
+        await bot.wait_until_ready()
 
+    @bot.command(description="Force load or reload all slash commands")
+    @commands.is_owner()
+    async def sync(ctx):
+        await bot.sync_commands(force=True)
+        logger.info(f"{datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
+        await ctx.reply("Slash commands are now synced. Wait a few seconds before using them.")
 
-@status_task.before_loop
-async def before_status_task() -> None:
-    await bot.wait_until_ready()
+    async def shutdown_bot() -> None:
+        logger.info("Shutdown started.")
 
+        # Stop custom background tasks first.
+        if status_task.is_running():
+            status_task.cancel()
 
-@bot.command(description="Force load or reload all slash commands")
-@commands.is_owner()
-async def sync(ctx):
-    await bot.sync_commands(force=True)
-    logger.info(f"{datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
-    await ctx.reply("Slash commands are now synced. Wait a few seconds before using them.")
+        # Unload extensions so cog_unload() runs.
+        for ext in list(bot.extensions):
+            try:
+                bot.unload_extension(ext)
+                logger.info(f"[-] Unloaded: {ext}")
+            except discord.ExtensionError:
+                logger.exception(f"[!] Failed to unload: {ext}")
 
+        # Close Discord connection last.
+        await bot.close()
+        logger.info("Shutdown finished.")
 
-async def shutdown_bot() -> None:
-    logger.info("Shutdown started.")
-
-    # Stop custom background tasks first.
-    if status_task.is_running():
-        status_task.cancel()
-
-    # Unload extensions so cog_unload() runs.
-    for ext in list(bot.extensions):
-        try:
-            bot.unload_extension(ext)
-            logger.info(f"[-] Unloaded: {ext}")
-        except discord.ExtensionError:
-            logger.exception(f"[!] Failed to unload: {ext}")
-
-    # Close Discord connection last.
-    await bot.close()
-    logger.info("Shutdown finished.")
+    return bot, shutdown_bot
 
 
 async def main() -> None:
+    bot, shutdown_bot = build_bot()
+
     for filename in os.listdir("cog"):
         if filename.endswith(".py"):
             cog = f"cog.{filename[:-3]}"
