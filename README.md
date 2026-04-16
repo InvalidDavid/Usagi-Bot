@@ -24,7 +24,7 @@ v2 components builder website that can help to understand it better: https://dis
     <a href="https://github.com/InvalidDavid/Usagi-Bot"><strong>Explore the docs »</strong></a>
     <br />
     <br />
-    <a href="https://discord.com/oauth2/authorize?client_id=1398686204228014091&permissions=8&integration_type=0&scope=bot">View Demo (Bot Link)</a>
+    <a href="https://discord.com/oauth2/authorize?client_id=1398686204228014091&permissions=2252333128215744&integration_type=0&scope=bot%20applications.commands">View Demo (Bot Link)</a>
     &middot;
     <a href="https://github.com/InvalidDavid/Usagi-Bot/issues/new?template=--bug-report-%F0%9F%90%9E.md">Report Bug</a>
     &middot;
