@@ -14,12 +14,14 @@ import sqlite3
 import sys
 import time
 import traceback
+import aiosqlite
 
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from typing import Any, Callable, Iterable, Optional, TypeAlias, Union
 from urllib.parse import ParseResult, parse_qs, urlparse
+from dataclasses import dataclass
 
 import aiohttp
 import discord
@@ -116,4 +118,7 @@ __all__ = [
     "urlparse",
     "User",
     "View",
+    "aiohttp",
+    "aiosqlite",
+    "dataclass",
 ]
