@@ -1,5 +1,6 @@
 from utils.imports import *
 
+
 class AniList(commands.Cog):
     ANILIST_API_URL = "https://graphql.anilist.co"
     ANILIST_LOGO_URL = "https://anilist.co/img/logo_al.png"
@@ -99,9 +100,7 @@ class AniList(commands.Cog):
             cover_image = {}
 
         media_id = media.get("id")
-        cover_url = cover_image.get("large")
-        if not cover_url and media_id:
-            cover_url = f"https://img.anili.st/media/{media_id}"
+        cover_url = f"https://img.anili.st/media/{media_id}"
 
         genres = media.get("genres")
         if not isinstance(genres, list):
