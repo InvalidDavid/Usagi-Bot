@@ -2,6 +2,7 @@ from utils.imports import *
 from utils.secrets import GUILDS_ID, OWNER, TOKEN
 
 # ---------------- PATHS ----------------
+# folders are now automaticly created on bot start
 UTILS_DIR = "utils"
 ERROR_DIR = "error"
 DATA_DIR = "Data"
