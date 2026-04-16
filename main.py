@@ -3,7 +3,7 @@ from utils.secrets import GUILDS_ID, OWNER, TOKEN
 
 # ---------------- PATHS ----------------
 UTILS_DIR = "utils"
-ERROR_DIR = os.path.join(UTILS_DIR, "error")
+ERROR_DIR = "error"
 DATA_DIR = "Data"
 
 for directory in (UTILS_DIR, ERROR_DIR, DATA_DIR):
@@ -67,6 +67,7 @@ if not discord_logger.handlers:
 # added a monkey patch so the bot can show a mobile status.
 # remove this if you do not want that behavior.
 # last tested on py-cord 2.7.2
+# will only be fixxed if discord patches it
 original_identify = discord.gateway.DiscordWebSocket.identify
 
 
