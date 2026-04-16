@@ -19,7 +19,7 @@ import aiosqlite
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
-from typing import Any, Callable, Iterable, Optional, TypeAlias, Union
+from typing import Any, Callable, Iterable, Optional, TypeAlias, Union, Awaitable
 from urllib.parse import ParseResult, parse_qs, urlparse
 from dataclasses import dataclass
 
@@ -121,4 +121,5 @@ __all__ = [
     "aiohttp",
     "aiosqlite",
     "dataclass",
+    "Awaitable",
 ]
