@@ -5,12 +5,16 @@ logger = logging.getLogger("bot.errors")
 
 # Cache retention for webhook/slash dedup entries.
 ERROR_CACHE_TTL_SECONDS = 300
+
 # Suppress duplicate webhook reports for the same traceback fingerprint.
 ERROR_WEBHOOK_DEDUP_SECONDS = 60
+
 # Suppress repeated slash error responses for the same user/command/error type.
 SLASH_ERROR_DEDUP_SECONDS = 10
+
 # Keep embed/codeblock text safely below Discord field limits.
 MAX_ERROR_FIELD_LENGTH = 1000
+
 # Hard caps to prevent cache growth during error bursts.
 MAX_WEBHOOK_ERROR_CACHE_SIZE = 1000
 MAX_SLASH_ERROR_CACHE_SIZE = 1000
@@ -469,7 +473,7 @@ class ErrorHandler(commands.Cog):
                 await ctx.followup.send(embed=embed, ephemeral=True)
             else:
                 await ctx.respond(embed=embed, ephemeral=True)
-        except discord.HTTPException:
+        except (discord.HTTPException, discord.InteractionResponded):
             logger.exception("Failed to send application command error response")
 
     @commands.Cog.listener()
