@@ -75,7 +75,6 @@ ERROR_MAP: dict[type[Exception], tuple[str, str]] = {
     commands.GuildNotFound: ("Not Found", "The server could not be found."),
     commands.ThreadNotFound: ("Not Found", "The thread could not be found."),
     commands.BadInviteArgument: ("Invalid Invite", "That invite is invalid or could not be parsed."),
-    commands.CommandNotFound: ("Not Found", "The command could not be found."),
 }
 
 # Common Discord API/client/runtime failures that deserve user-friendly output.
@@ -419,6 +418,9 @@ class ErrorHandler(commands.Cog):
     @commands.Cog.listener()
     async def on_command_error(self, ctx: commands.Context, error: Exception) -> None:
         error = self.unwrap_error(error)
+
+        if isinstance(error, commands.CommandNotFound):
+            return
 
         # Respect command-local or cog-local error handlers.
         if getattr(ctx.command, "on_error", None):
