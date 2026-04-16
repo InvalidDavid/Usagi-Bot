@@ -2,7 +2,6 @@ from utils.imports import *
 from utils.secrets import GUILDS_ID, OWNER, TOKEN
 
 # ---------------- PATHS ----------------
-# folders are now automaticly created on bot start
 UTILS_DIR = "utils"
 ERROR_DIR = "error"
 DATA_DIR = "Data"
@@ -158,19 +157,20 @@ async def on_ready() -> None:
         status_task.start()
 
 
+
 @tasks.loop(seconds=60)
 async def status_task() -> None:
     if not hasattr(status_task, "index"):
         status_task.index = 0
 
     statuses = [
-        (discord.Status.dnd, discord.Activity(type=discord.ActivityType.custom, state="©️ made by InvalidDavid")),
-        (discord.Status.online, discord.Activity(type=discord.ActivityType.custom, state="🏆 Check my profile out!")),
-        (discord.Status.online, discord.Activity(type=discord.ActivityType.custom, state=f"🏓 Ping: {round(bot.latency * 1000)}ms")),
+        (discord.Activity(type=discord.ActivityType.custom, state="©️ made by InvalidDavid")),
+        (discord.Activity(type=discord.ActivityType.custom, state="🏆 Check my profile out!")),
+        (discord.Activity(type=discord.ActivityType.custom, state=f"🏓 Ping: {round(bot.latency * 1000)}ms")),
     ]
 
-    status, activity = statuses[status_task.index]
-    await bot.change_presence(status=status, activity=activity)
+    activity = statuses[status_task.index]
+    await bot.change_presence(activity=activity)
 
     status_task.index = (status_task.index + 1) % len(statuses)
 
@@ -188,14 +188,44 @@ async def sync(ctx):
     await ctx.reply("Slash commands are now synced. Wait a few seconds before using them.")
 
 
-if __name__ == "__main__":
+async def shutdown_bot() -> None:
+    logger.info("Shutdown started.")
+
+    # Stop custom background tasks first.
+    if status_task.is_running():
+        status_task.cancel()
+
+    # Unload extensions so cog_unload() runs.
+    for ext in list(bot.extensions):
+        try:
+            bot.unload_extension(ext)
+            logger.info(f"[-] Unloaded: {ext}")
+        except discord.ExtensionError:
+            logger.exception(f"[!] Failed to unload: {ext}")
+
+    # Close Discord connection last.
+    await bot.close()
+    logger.info("Shutdown finished.")
+
+
+async def main() -> None:
     for filename in os.listdir("cog"):
         if filename.endswith(".py"):
             cog = f"cog.{filename[:-3]}"
             try:
                 bot.load_extension(cog)
                 logger.info(f"[+] Loaded: {cog}")
-            except Exception:
+            except discord.ExtensionError:
                 logger.exception(f"[!] Error {cog}")
 
-    bot.run(TOKEN)
+    try:
+        await bot.start(TOKEN)
+    finally:
+        await shutdown_bot()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by KeyboardInterrupt.")
