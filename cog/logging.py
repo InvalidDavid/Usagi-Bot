@@ -668,7 +668,7 @@ class Logs(LogsHelper, commands.Cog):
         header_text = self._truncate(
             "\n".join(
                 [
-                    f"User {self.ARROW} {member} • {member.id}",
+                    f"User {self.ARROW} {member} • {member.mention}",
                     f"ID {self.ARROW} `{after.id}`",
                 ]
             ),
@@ -857,11 +857,6 @@ class Logs(LogsHelper, commands.Cog):
         after_topic = getattr(after, "topic", None)
         if before_topic != after_topic:
             changes.append(f"Topic {self.ARROW} `{before_topic or 'None'}` → `{after_topic or 'None'}`")
-
-        if getattr(before, "position", None) != getattr(after, "position", None):
-            changes.append(
-                f"Position {self.ARROW} `{getattr(before, 'position', None)}` → `{getattr(after, 'position', None)}`"
-            )
 
         if getattr(before, "category_id", None) != getattr(after, "category_id", None):
             changes.append(
@@ -1291,7 +1286,6 @@ class Logs(LogsHelper, commands.Cog):
                     f"Name {self.ARROW} {msg_before.author} | {msg_before.author.mention}\n"
                     f"ID {self.ARROW} `{msg_before.author.id}`\n\n"
                     f"Channel {self.ARROW} {msg_before.channel.name} | {self._channel_name(msg_before.channel)}\n"
-                    f"Message ID {self.ARROW} `{msg_before.id}`"
                 ),
                 accessory=discord.ui.Thumbnail(self._safe_avatar_url(msg_before.author)),
             ),
