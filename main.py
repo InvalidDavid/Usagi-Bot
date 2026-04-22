@@ -2,7 +2,7 @@ from utils.imports import *
 from utils.secrets import GUILDS_ID, OWNER, TOKEN
 
 # ---------------- PATHS ----------------
-# automaticlly creates folder on bot starts
+# automatically creates folders on bot start
 UTILS_DIR = "utils"
 ERROR_DIR = "error"
 DATA_DIR = "Data"
@@ -18,7 +18,7 @@ logger.propagate = False
 
 formatter = logging.Formatter(
     "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 console_handler = logging.StreamHandler(sys.stdout)
@@ -29,7 +29,7 @@ console_handler.setFormatter(formatter)
 file_handler = logging.FileHandler(
     os.path.join(ERROR_DIR, "bot.log"),
     mode="w",
-    encoding="utf-8"
+    encoding="utf-8",
 )
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
@@ -37,13 +37,13 @@ file_handler.setFormatter(formatter)
 # create only if an actual error happens
 error_filename = os.path.join(
     ERROR_DIR,
-    f"crash_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+    f"crash_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log",
 )
 error_handler = logging.FileHandler(
     error_filename,
     mode="w",
     encoding="utf-8",
-    delay=True
+    delay=True,
 )
 error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(formatter)
@@ -62,11 +62,217 @@ if not discord_logger.handlers:
     discord_logger.addHandler(file_handler)
     discord_logger.addHandler(error_handler)
 
+# ---------------- GLOBAL CACHE ----------------
+GLOBAL_CACHE_MAX_ENTRIES = 5000
+GLOBAL_CACHE_DEFAULT_TTL_SECONDS = 15 * 60
+GLOBAL_CACHE_CLEANUP_INTERVAL_SECONDS = 5 * 60
+
+
+@dataclass(slots=True)
+class CacheEntry:
+    value: Any
+    created_at: float
+    touched_at: float
+    expires_at: Optional[float] = None
+
+
+class GlobalCache:
+    def __init__(
+        self,
+        *,
+        max_entries: int = GLOBAL_CACHE_MAX_ENTRIES,
+        default_ttl: Optional[float] = GLOBAL_CACHE_DEFAULT_TTL_SECONDS,
+        cleanup_interval: float = GLOBAL_CACHE_CLEANUP_INTERVAL_SECONDS,
+        logger_: Optional[logging.Logger] = None,
+    ):
+        self.max_entries = max(1, int(max_entries))
+        self.default_ttl = default_ttl
+        self.cleanup_interval = max(5.0, float(cleanup_interval))
+        self.logger = logger_ or logging.getLogger("bot.cache")
+
+        self._store: dict[str, CacheEntry] = {}
+        self._lock = asyncio.Lock()
+        self._cleanup_task: Optional[asyncio.Task] = None
+
+    async def start(self) -> None:
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+            self.logger.info(
+                "Global cache started | max_entries=%s | default_ttl=%s | cleanup_interval=%ss",
+                self.max_entries,
+                self.default_ttl,
+                int(self.cleanup_interval),
+            )
+
+    async def close(self) -> None:
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._cleanup_task
+            self._cleanup_task = None
+
+        cleared = await self.clear()
+        self.logger.info("Global cache stopped | cleared %s entr%s", cleared, "y" if cleared == 1 else "ies")
+
+    def _now(self) -> float:
+        return time.monotonic()
+
+    def _resolve_expires_at(self, ttl: Optional[float], now: float) -> Optional[float]:
+        if ttl is None:
+            ttl = self.default_ttl
+
+        if ttl is None:
+            return None
+
+        ttl = float(ttl)
+        if ttl <= 0:
+            return now
+
+        return now + ttl
+
+    def _is_expired(self, entry: CacheEntry, now: float) -> bool:
+        return entry.expires_at is not None and entry.expires_at <= now
+
+    def _evict_one_locked(self, now: float) -> Optional[str]:
+        expired_keys = [key for key, entry in self._store.items() if self._is_expired(entry, now)]
+        if expired_keys:
+            key_to_remove = min(expired_keys, key=lambda key: self._store[key].expires_at or now)
+            self._store.pop(key_to_remove, None)
+            return key_to_remove
+
+        if not self._store:
+            return None
+
+        key_to_remove = min(
+            self._store,
+            key=lambda key: (self._store[key].touched_at, self._store[key].created_at),
+        )
+        self._store.pop(key_to_remove, None)
+        return key_to_remove
+
+    async def set(self, key: str, value: Any, ttl: Optional[float] = None) -> Any:
+        key = str(key)
+        now = self._now()
+        expires_at = self._resolve_expires_at(ttl, now)
+
+        async with self._lock:
+            if expires_at is not None and expires_at <= now:
+                self._store.pop(key, None)
+                return value
+
+            if key not in self._store and len(self._store) >= self.max_entries:
+                self._evict_one_locked(now)
+
+            self._store[key] = CacheEntry(
+                value=value,
+                created_at=now,
+                touched_at=now,
+                expires_at=expires_at,
+            )
+            return value
+
+    async def get(self, key: str, default: Any = None) -> Any:
+        key = str(key)
+        now = self._now()
+
+        async with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return default
+
+            if self._is_expired(entry, now):
+                self._store.pop(key, None)
+                return default
+
+            entry.touched_at = now
+            return entry.value
+
+    async def has(self, key: str) -> bool:
+        sentinel = object()
+        return await self.get(key, sentinel) is not sentinel
+
+    async def delete(self, key: str) -> bool:
+        key = str(key)
+        async with self._lock:
+            return self._store.pop(key, None) is not None
+
+    async def pop(self, key: str, default: Any = None) -> Any:
+        key = str(key)
+        now = self._now()
+
+        async with self._lock:
+            entry = self._store.pop(key, None)
+            if entry is None:
+                return default
+
+            if self._is_expired(entry, now):
+                return default
+
+            return entry.value
+
+    async def clear(self) -> int:
+        async with self._lock:
+            cleared = len(self._store)
+            self._store.clear()
+            return cleared
+
+    async def cleanup(self) -> int:
+        now = self._now()
+
+        async with self._lock:
+            expired_keys = [key for key, entry in self._store.items() if self._is_expired(entry, now)]
+            for key in expired_keys:
+                self._store.pop(key, None)
+            return len(expired_keys)
+
+    async def keys(self) -> list[str]:
+        now = self._now()
+
+        async with self._lock:
+            expired_keys = [key for key, entry in self._store.items() if self._is_expired(entry, now)]
+            for key in expired_keys:
+                self._store.pop(key, None)
+            return list(self._store.keys())
+
+    async def stats(self) -> dict[str, Any]:
+        now = self._now()
+
+        async with self._lock:
+            expired = 0
+            for key, entry in list(self._store.items()):
+                if self._is_expired(entry, now):
+                    self._store.pop(key, None)
+                    expired += 1
+
+            ttl_entries = sum(1 for entry in self._store.values() if entry.expires_at is not None)
+            persistent_entries = len(self._store) - ttl_entries
+
+            return {
+                "entries": len(self._store),
+                "expired_removed": expired,
+                "max_entries": self.max_entries,
+                "default_ttl": self.default_ttl,
+                "cleanup_interval": self.cleanup_interval,
+                "ttl_entries": ttl_entries,
+                "persistent_entries": persistent_entries,
+            }
+
+    async def _cleanup_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self.cleanup_interval)
+                removed = await self.cleanup()
+                if removed:
+                    self.logger.info("Global cache cleanup removed %s expired entr%s", removed, "y" if removed == 1 else "ies")
+        except asyncio.CancelledError:
+            return
+
+
 # ---------------- MOBILE STATUS ----------------
 # added a monkey patch so the bot can show a mobile status.
 # remove this if you do not want that behavior.
 # last tested on py-cord 2.7.2
-# will only be fixxed if discord patches it
+# will only be fixed if discord patches it
 original_identify = discord.gateway.DiscordWebSocket.identify
 
 
@@ -80,12 +286,12 @@ async def patched_identify(self):
                 "$browser": "Discord Android",
                 "$device": "Android",
                 "$referrer": "",
-                "$referring_domain": ""
+                "$referring_domain": "",
             },
             "compress": True,
             "large_threshold": 250,
-            "v": 3
-        }
+            "v": 3,
+        },
     }
 
     if hasattr(self, "shard_id") and self.shard_id is not None:
@@ -107,15 +313,49 @@ discord.gateway.DiscordWebSocket.identify = patched_identify
 # ---------------------------------------
 
 
+def safe_ping_ms(latency: Any) -> Optional[int]:
+    if not isinstance(latency, (int, float)):
+        return None
+
+    if latency != latency:  # NaN check
+        return None
+
+    if latency in (float("inf"), float("-inf")):
+        return None
+
+    ms = latency * 1000
+    if ms < 0:
+        return None
+
+    return round(ms)
+
+
+def format_ping_ms(latency: Any) -> str:
+    ping = safe_ping_ms(latency)
+    return f"{ping} ms" if ping is not None else "N/A"
+
+
 def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
     bot = commands.Bot(
         intents=discord.Intents.all(),
-        debug_guilds=GUILDS_ID,
         sync_commands=True,
         owner_ids=OWNER,
         command_prefix="=",
         help_command=None,
     )
+
+    bot.global_cache = GlobalCache(logger_=logging.getLogger("bot.cache"))
+    bot.cache = bot.global_cache
+    bot.cache_get = bot.global_cache.get
+    bot.cache_set = bot.global_cache.set
+    bot.cache_has = bot.global_cache.has
+    bot.cache_delete = bot.global_cache.delete
+    bot.cache_pop = bot.global_cache.pop
+    bot.cache_clear = bot.global_cache.clear
+    bot.cache_cleanup = bot.global_cache.cleanup
+    bot.cache_keys = bot.global_cache.keys
+    bot.cache_stats = bot.global_cache.stats
+    bot._startup_logged = False
 
     @bot.event
     async def on_ready() -> None:
@@ -130,13 +370,13 @@ def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
             for m in g.members
             if m.bot
         )
-        ping = round(bot.latency * 1000)
+        ping = format_ping_ms(bot.latency)
         slash_commands = len(bot.application_commands)
         prefix_commands = len(bot.commands)
 
         infos = [
             f"Framework      : Pycord {discord.__version__}",
-            f"Ping           : {ping} ms",
+            f"Ping           : {ping}",
             f"Guilds         : {guilds}",
             f"Users          : {users:,}",
             f"Bots           : {bots:,}",
@@ -148,10 +388,14 @@ def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
         logger.info(f"╔{'═' * (width + 2)}╗")
         for line in infos:
             logger.info(f"║ {line:<{width}} ║")
-
         logger.info(f"╚{'═' * (width + 2)}╝\n")
 
-        logger.info("Bot successfully started.")
+        if not bot._startup_logged:
+            logger.info("Bot successfully started.")
+            bot._startup_logged = True
+        else:
+            logger.info("Bot reconnected and is ready.")
+
         if not status_task.is_running():
             status_task.start()
 
@@ -160,15 +404,17 @@ def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
         if not hasattr(status_task, "index"):
             status_task.index = 0
 
+        ping = safe_ping_ms(bot.latency)
+        ping_state = f"🏓 Ping: {ping}ms" if ping is not None else "🏓 Ping: N/A"
+
         statuses = [
             discord.Activity(type=discord.ActivityType.custom, state="©️ made by InvalidDavid"),
             discord.Activity(type=discord.ActivityType.custom, state="🏆 Check my profile out!"),
-            discord.Activity(type=discord.ActivityType.custom, state=f"🏓 Ping: {round(bot.latency * 1000)}ms"),
+            discord.Activity(type=discord.ActivityType.custom, state=ping_state),
         ]
 
         activity = statuses[status_task.index]
         await bot.change_presence(activity=activity)
-
         status_task.index = (status_task.index + 1) % len(statuses)
 
     @status_task.before_loop
@@ -177,19 +423,39 @@ def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
 
     @bot.command(description="Force load or reload all slash commands")
     @commands.is_owner()
-    async def sync(ctx):
+    async def sync(ctx: commands.Context) -> None:
         await bot.sync_commands(force=True)
-        logger.info(f"{datetime.now()}: Synced from {ctx.author} ({ctx.author.id})")
+        logger.info("%s: Synced from %s (%s)", datetime.now(), ctx.author, ctx.author.id)
         await ctx.reply("Slash commands are now synced. Wait a few seconds before using them.")
+
+    @bot.command(name="cacheclear", hidden=True)
+    @commands.is_owner()
+    async def cacheclear(ctx: commands.Context) -> None:
+        cleared = await bot.cache_clear()
+        logger.info("Manual cache clear executed by %s (%s) | cleared %s", ctx.author, ctx.author.id, cleared)
+        await ctx.reply(f"Cleared {cleared} cache entr{'y' if cleared == 1 else 'ies'}.")
+
+    @bot.command(name="cachestats", hidden=True)
+    @commands.is_owner()
+    async def cachestats(ctx: commands.Context) -> None:
+        stats = await bot.cache_stats()
+        await ctx.reply(
+            "\n".join([
+                f"entries={stats['entries']}",
+                f"ttl_entries={stats['ttl_entries']}",
+                f"persistent_entries={stats['persistent_entries']}",
+                f"max_entries={stats['max_entries']}",
+                f"default_ttl={stats['default_ttl']}",
+                f"cleanup_interval={stats['cleanup_interval']}",
+            ])
+        )
 
     async def shutdown_bot() -> None:
         logger.info("Shutdown started.")
 
-        # Stop custom background tasks first.
         if status_task.is_running():
             status_task.cancel()
 
-        # Unload extensions so cog_unload() runs.
         for ext in list(bot.extensions):
             try:
                 bot.unload_extension(ext)
@@ -197,7 +463,7 @@ def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
             except discord.ExtensionError:
                 logger.exception(f"[!] Failed to unload: {ext}")
 
-        # Close Discord connection last.
+        await bot.global_cache.close()
         await bot.close()
         logger.info("Shutdown finished.")
 
@@ -206,15 +472,20 @@ def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
 
 async def main() -> None:
     bot, shutdown_bot = build_bot()
+    await bot.global_cache.start()
 
-    for filename in os.listdir("cog"):
-        if filename.endswith(".py"):
-            cog = f"cog.{filename[:-3]}"
-            try:
-                bot.load_extension(cog)
-                logger.info(f"[+] Loaded: {cog}")
-            except discord.ExtensionError:
-                logger.exception(f"[!] Error {cog}")
+    for filename in sorted(os.listdir("cog")):
+        if not filename.endswith(".py"):
+            continue
+        if filename.startswith("_"):
+            continue
+
+        cog = f"cog.{filename[:-3]}"
+        try:
+            bot.load_extension(cog)
+            logger.info(f"[+] Loaded: {cog}")
+        except discord.ExtensionError:
+            logger.exception(f"[!] Error {cog}")
 
     try:
         await bot.start(TOKEN)
