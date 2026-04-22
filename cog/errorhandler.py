@@ -19,9 +19,13 @@ MAX_ERROR_FIELD_LENGTH = 1000
 MAX_WEBHOOK_ERROR_CACHE_SIZE = 1000
 MAX_SLASH_ERROR_CACHE_SIZE = 1000
 
+# Discord interaction timing rules.
+INITIAL_INTERACTION_RESPONSE_DEADLINE_SECONDS = 3.0
+FOLLOWUP_INTERACTION_TTL_SECONDS = 15 * 60.0
+EPHEMERAL_FALLBACK_DELETE_AFTER_SECONDS = 30.0
+
 
 def cooldown_timestamp(seconds: float, show_absolute: bool = True) -> str:
-    # Format cooldown both relatively and absolutely for clarity.
     target_time = datetime.now(timezone.utc) + timedelta(seconds=seconds)
     relative = discord.utils.format_dt(target_time, style="R")
     absolute = discord.utils.format_dt(target_time, style="F")
@@ -29,15 +33,12 @@ def cooldown_timestamp(seconds: float, show_absolute: bool = True) -> str:
 
 
 def shorten_codeblock_text(text, limit: int = MAX_ERROR_FIELD_LENGTH) -> str:
-    # Prevent oversized embed fields from failing to send.
     text = str(text).strip() or "Unknown error"
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
 
 
-# Specific, user-facing command/check/conversion errors.
-# Keep more specific exceptions above broader parent classes.
 ERROR_MAP: dict[type[Exception], tuple[str, str]] = {
     commands.MissingPermissions: ("Missing Permissions", "You lack the required permissions to use this command."),
     commands.BotMissingPermissions: ("Bot Missing Permissions", "I lack the required permissions to execute this command."),
@@ -77,7 +78,6 @@ ERROR_MAP: dict[type[Exception], tuple[str, str]] = {
     commands.BadInviteArgument: ("Invalid Invite", "That invite is invalid or could not be parsed."),
 }
 
-# Common Discord API/client/runtime failures that deserve user-friendly output.
 DISCORD_API_ERRORS: dict[type[Exception], tuple[str, str]] = {
     discord.Forbidden: ("Access Denied", "I do not have permission to do that."),
     discord.NotFound: ("Not Found", "The requested resource was not found."),
@@ -95,26 +95,19 @@ class WebhookLogger:
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
         self._session: Optional[aiohttp.ClientSession] = None
-
-        # Fingerprint -> last seen timestamp.
         self._error_cache: dict[str, datetime] = {}
-
-        # Managed background task for periodic cache pruning.
         self._cleanup_task: Optional[asyncio.Task] = None
         self._started = False
 
     async def start(self) -> None:
-        # Start only once, even if on_ready fires multiple times after reconnects.
         if self._started:
             return
 
         self._started = True
-
         if self._cleanup_task is None or self._cleanup_task.done():
             self._cleanup_task = asyncio.create_task(self._cleanup_cache_loop())
 
     async def close(self) -> None:
-        # Stop cleanup task first, then close HTTP session.
         self._started = False
 
         if self._cleanup_task is not None:
@@ -196,7 +189,10 @@ class WebhookLogger:
         channel_type = getattr(channel, "type", "Unknown")
 
         command_obj = getattr(ctx, "command", None)
-        command_name = getattr(command_obj, "qualified_name", getattr(command_obj, "name", "Unknown")) if command_obj else "Unknown"
+        command_name = (
+            getattr(command_obj, "qualified_name", getattr(command_obj, "name", "Unknown"))
+            if command_obj else "Unknown"
+        )
 
         event_type = type(ctx).__name__ if ctx is not None else "Unknown"
         discord_timestamp = f"<t:{int(now.timestamp())}:F>"
@@ -249,7 +245,6 @@ class ErrorHandler(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.webhook_logger: Optional[WebhookLogger] = WebhookLogger(WEBHOOK_URL) if WEBHOOK_URL else None
-
         self._slash_error_cache: dict[tuple[int, str, type[Exception]], datetime] = {}
         self._slash_cache_cleanup_task: Optional[asyncio.Task] = None
         self._background_started = False
@@ -313,7 +308,6 @@ class ErrorHandler(commands.Cog):
 
     @staticmethod
     def unwrap_error(error: Exception) -> Exception:
-        # Unwrap invoke wrappers so downstream handling sees the real exception.
         if isinstance(error, commands.CommandInvokeError) and getattr(error, "original", None):
             return error.original
         if isinstance(error, discord.ApplicationCommandInvokeError) and getattr(error, "original", None):
@@ -322,7 +316,6 @@ class ErrorHandler(commands.Cog):
 
     @staticmethod
     def is_critical_error(error: Exception) -> bool:
-        # Known user-facing errors should not be treated as critical internals.
         if isinstance(error, commands.CommandOnCooldown):
             return False
         if isinstance(error, tuple(ERROR_MAP.keys())):
@@ -359,6 +352,111 @@ class ErrorHandler(commands.Cog):
         )
         return embed
 
+    @staticmethod
+    def _get_ctx_user(ctx) -> Optional[Union[discord.Member, discord.User]]:
+        return getattr(ctx, "author", getattr(ctx, "user", None))
+
+    @staticmethod
+    def _interaction_age_seconds(interaction: Optional[discord.Interaction]) -> float:
+        if interaction is None:
+            return float("inf")
+
+        created_at = getattr(interaction, "created_at", None)
+        if created_at is None:
+            return 0.0
+
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
+        return max(0.0, (datetime.now(timezone.utc) - created_at).total_seconds())
+
+    @classmethod
+    def _can_send_initial_interaction_response(cls, interaction: Optional[discord.Interaction]) -> bool:
+        return cls._interaction_age_seconds(interaction) < INITIAL_INTERACTION_RESPONSE_DEADLINE_SECONDS
+
+    @classmethod
+    def _can_send_interaction_followup(cls, interaction: Optional[discord.Interaction]) -> bool:
+        return cls._interaction_age_seconds(interaction) < FOLLOWUP_INTERACTION_TTL_SECONDS
+
+    async def _send_channel_fallback(
+        self,
+        ctx: Union[commands.Context, discord.ApplicationContext],
+        embed: discord.Embed,
+        *,
+        delete_after: Optional[float] = None,
+    ) -> bool:
+        channel = getattr(ctx, "channel", None)
+        if channel is None or not hasattr(channel, "send"):
+            logger.warning("No usable channel fallback available for %s", type(ctx).__name__)
+            return False
+
+        user = self._get_ctx_user(ctx)
+        content = getattr(user, "mention", None) if delete_after is not None else None
+
+        try:
+            await channel.send(content=content, embed=embed, delete_after=delete_after)
+            return True
+        except discord.Forbidden:
+            logger.warning(
+                "Missing permission to send fallback error message in channel=%s",
+                getattr(channel, "id", None),
+            )
+            return False
+        except discord.HTTPException:
+            logger.exception("Failed to send fallback channel error message")
+            return False
+
+    async def _send_via_interaction_or_fallback(
+        self,
+        ctx: Union[commands.Context, discord.ApplicationContext],
+        embed: discord.Embed,
+        *,
+        ephemeral: bool,
+    ) -> None:
+        interaction = getattr(ctx, "interaction", None)
+        delete_after = EPHEMERAL_FALLBACK_DELETE_AFTER_SECONDS if ephemeral else None
+
+        if interaction is None:
+            if isinstance(ctx, commands.Context):
+                try:
+                    await ctx.reply(embed=embed, mention_author=False)
+                    return
+                except discord.HTTPException:
+                    logger.exception("Failed to send prefix command error response")
+                    return
+
+            await self._send_channel_fallback(ctx, embed, delete_after=delete_after)
+            return
+
+        try:
+            if interaction.response.is_done():
+                if self._can_send_interaction_followup(interaction):
+                    await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+                    return
+            else:
+                if self._can_send_initial_interaction_response(interaction):
+                    await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+                    return
+        except discord.InteractionResponded:
+            if self._can_send_interaction_followup(interaction):
+                try:
+                    await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+                    return
+                except discord.NotFound:
+                    logger.warning("Interaction followup token expired while sending error response")
+                except discord.HTTPException:
+                    logger.exception("Failed to send followup error response after race")
+            else:
+                logger.warning("Interaction was already responded to, but the followup token expired")
+        except discord.NotFound:
+            logger.warning("Interaction token expired or became invalid while sending error response")
+        except discord.HTTPException:
+            logger.exception("Failed to send interaction error response")
+
+        sent = await self._send_channel_fallback(ctx, embed, delete_after=delete_after)
+        if not sent:
+            logger.warning("Failed to deliver error response after interaction fallback")
+
     async def send_error_embed(
         self,
         ctx: Union[commands.Context, discord.ApplicationContext],
@@ -368,27 +466,7 @@ class ErrorHandler(commands.Cog):
         ephemeral: bool = True,
     ) -> None:
         embed = self.build_basic_error_embed(title, description)
-
-        try:
-            if isinstance(ctx, commands.Context):
-                interaction = getattr(ctx, "interaction", None)
-                if interaction is not None:
-                    if interaction.response.is_done():
-                        await interaction.followup.send(embed=embed, ephemeral=ephemeral)
-                    else:
-                        await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
-                    return
-
-                await ctx.reply(embed=embed, mention_author=False)
-                return
-
-            if ctx.response.is_done():
-                await ctx.followup.send(embed=embed, ephemeral=ephemeral)
-            else:
-                await ctx.respond(embed=embed, ephemeral=ephemeral)
-
-        except (discord.HTTPException, discord.InteractionResponded):
-            logger.exception("Failed to send error embed")
+        await self._send_via_interaction_or_fallback(ctx, embed, ephemeral=ephemeral)
 
     async def maybe_report_critical_error(self, ctx, error: Exception) -> None:
         if self.is_critical_error(error) and self.webhook_logger is not None:
@@ -396,7 +474,6 @@ class ErrorHandler(commands.Cog):
 
     @staticmethod
     def resolve_known_error(error: Exception) -> Optional[tuple[str, str]]:
-        # Convert common known exceptions into consistent user-facing responses.
         if isinstance(error, commands.CommandOnCooldown):
             timestamp = cooldown_timestamp(error.retry_after)
             return "Cooldown", f"This command is on cooldown. Try again {timestamp}."
@@ -422,7 +499,6 @@ class ErrorHandler(commands.Cog):
         if isinstance(error, commands.CommandNotFound):
             return
 
-        # Respect command-local or cog-local error handlers.
         if getattr(ctx.command, "on_error", None):
             return
 
@@ -439,10 +515,7 @@ class ErrorHandler(commands.Cog):
         await self.maybe_report_critical_error(ctx, error)
 
         embed = self.build_unexpected_error_embed(str(ctx.author), error)
-        try:
-            await ctx.reply(embed=embed, mention_author=False)
-        except discord.HTTPException:
-            logger.exception("Failed to send command error response")
+        await self._send_via_interaction_or_fallback(ctx, embed, ephemeral=False)
 
     @commands.Cog.listener()
     async def on_application_command_error(self, ctx: discord.ApplicationContext, error: Exception) -> None:
@@ -470,17 +543,10 @@ class ErrorHandler(commands.Cog):
         await self.maybe_report_critical_error(ctx, error)
 
         embed = self.build_unexpected_error_embed(str(ctx.user), error)
-        try:
-            if ctx.response.is_done():
-                await ctx.followup.send(embed=embed, ephemeral=True)
-            else:
-                await ctx.respond(embed=embed, ephemeral=True)
-        except (discord.HTTPException, discord.InteractionResponded):
-            logger.exception("Failed to send application command error response")
+        await self._send_via_interaction_or_fallback(ctx, embed, ephemeral=True)
 
     @commands.Cog.listener()
     async def on_error(self, event_method: str, *args, **_kwargs) -> None:
-        # Discord event-level fallback for listener errors, not command handler errors.
         exc_type, exc_value, exc_tb = sys.exc_info()
         if exc_value is None:
             return
