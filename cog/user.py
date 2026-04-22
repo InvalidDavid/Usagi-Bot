@@ -1,4 +1,8 @@
 from utils.imports import *
+from utils.secrets import OWNER
+
+logger = logging.getLogger("bot.user")
+
 
 class HelpView(View):
     def __init__(self, bot: discord.Bot, embeds, page_info=None):
@@ -58,7 +62,7 @@ class HelpView(View):
         except discord.NotFound:
             pass
         except Exception as e:
-            print(f"Error on timeout: {e}")
+            logger.warning(f"Error on timeout: {e}")
 
     async def prev_page(self, interaction: discord.Interaction):
         self.current_page -= 1
@@ -138,13 +142,6 @@ class User(commands.Cog):
             uptime = now - self.start_time
             start = time.perf_counter()
 
-            python_version = platform.python_version()
-            discord_py_version = discord.__version__
-            system_info = f"{platform.system()} {platform.release()}"
-
-            cpu_percent = psutil.cpu_percent(interval=0.1)
-            ram_percent = psutil.virtual_memory().percent
-
             created_at = self.bot.user.created_at if self.bot.user else None
             created_str = "Not available" if not created_at else f"{format_dt(created_at, 'F')} ({format_dt(created_at, 'R')})"
 
@@ -183,17 +180,25 @@ class User(commands.Cog):
                             inline=True)
             embed.add_field(name="⚡ Command-Reactiontime", value=f"```{cmd_latency} ms```", inline=True)
 
+            if ctx.author.id in OWNER or ctx.author.id == OWNER:
 
-            embed.add_field(name="💻 CPU", value=f"```{cpu_percent:.1f}%```",
+                python_version = platform.python_version()
+                discord_py_version = discord.__version__
+                system_info = f"{platform.system()} {platform.release()}"
+
+                cpu_percent = psutil.cpu_percent(interval=0.1)
+                ram_percent = psutil.virtual_memory().percent
+
+                embed.add_field(name="💻 CPU", value=f"```{cpu_percent:.1f}%```",
                             inline=True)
-            embed.add_field(name="🧠 RAM", value=f"```{ram_percent:.2f}%```",
+                embed.add_field(name="🧠 RAM", value=f"```{ram_percent:.2f}%```",
                             inline=True)
-            embed.add_field(name="🖥️ Platform", value=f"```{system_info}```", inline=True)
+                embed.add_field(name="🖥️ Platform", value=f"```{system_info}```", inline=True)
 
 
-            embed.add_field(name="🐍 Python Version", value=f"```{python_version}```",
+                embed.add_field(name="🐍 Python Version", value=f"```{python_version}```",
                             inline=True)
-            embed.add_field(name="📦 Py-cord Version", value=f"```{discord_py_version}```",
+                embed.add_field(name="📦 Py-cord Version", value=f"```{discord_py_version}```",
                             inline=True)
 
             embed.set_footer(text=f"Requested from {ctx.author}", icon_url=ctx.author.display_avatar.url)
@@ -329,6 +334,12 @@ class User(commands.Cog):
                 new_index += 1
 
         return final_embeds, final_page_info
+
+
+
+    # ---------------------------------------
+
+
 
 def setup(bot):
     bot.add_cog(User(bot))
