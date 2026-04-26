@@ -176,9 +176,9 @@ class User(commands.Cog):
             embed.add_field(name="🏓 WebSocket Ping", value=f"```{ws_ping} ms```",
                             inline=True)
             embed.add_field(name="📡 API Ping",
-                            value=f"```{api_ping if api_ping is not None else 'Fehler'} ms```",
+                            value=f"```{api_ping if api_ping is not None else 'Error'} ms```",
                             inline=True)
-            embed.add_field(name="⚡ Command-Reactiontime", value=f"```{cmd_latency} ms```", inline=True)
+            embed.add_field(name="⚡ Command-Reaction Time", value=f"```{cmd_latency} ms```", inline=True)
 
             if ctx.author.id in OWNER or ctx.author.id == OWNER:
 
