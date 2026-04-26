@@ -1,5 +1,7 @@
 from utils.imports import *
 
+logger = logging.getLogger("bot.owner")
+
 COGS_FOLDER = "cog"
 
 # Cogs that u don't want to be shown in /cog owner list and in the autocomplete function as well cant be reloaded, unloaded etc.
@@ -120,7 +122,7 @@ class GuildLeaveSelect(discord.ui.Select):
                 ephemeral=True
             )
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("Failed to leave guild %s (%s)", guild_name, guild_id)
             await interaction.response.send_message(
                 f"❌ Failed to leave `{guild_name}`\n```{e}```",
                 ephemeral=True
@@ -231,7 +233,7 @@ class OwnerC(commands.Cog):
             self.bot.load_extension(module(name))
             await ctx.respond(f"✅ `{name}` loaded", ephemeral=True)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("Failed to load cog %s", name)
             await ctx.respond(
                 f"❌ Load failed\n```{e}```",
                 ephemeral=True
@@ -254,7 +256,7 @@ class OwnerC(commands.Cog):
             self.bot.unload_extension(module(name))
             await ctx.respond(f"🔴 `{name}` unloaded", ephemeral=True)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("Failed to unload cog %s", name)
             await ctx.respond(
                 f"❌ Unload failed\n```{e}```",
                 ephemeral=True
@@ -280,7 +282,7 @@ class OwnerC(commands.Cog):
                 self.bot.load_extension(module(name))
             await ctx.respond(f"🔄 `{name}` reloaded", ephemeral=True)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("Failed to reload cog %s", name)
             await ctx.respond(
                 f"❌ Reload failed\n```{e}```",
                 ephemeral=True
@@ -302,6 +304,7 @@ class OwnerC(commands.Cog):
                     self.bot.load_extension(module(cog))
                 ok.append(cog)
             except Exception as e:
+                logger.exception("Failed to reload cog %s during reload_all", cog)
                 fail.append(f"{cog}: {e}")
         msg = "\n".join(
             [f"🔄 `{c}`" for c in ok] +
