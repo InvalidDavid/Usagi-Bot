@@ -1,4 +1,3 @@
-# again like in reminder.py line 237 gets confused again
 from dataclasses import dataclass
 from utils.imports import *
 
@@ -392,6 +391,25 @@ class Autolink(commands.Cog):
                 dedup_key=f"reddit-share:{share_id.lower()}",
             )
 
+        # Shared subreddit/user short URL:
+        # /r/<subreddit>/s/<id>
+        # /u/<user>/s/<id>
+        # /user/<user>/s/<id>
+        if (
+            len(path_parts) >= 4
+            and path_parts[0].lower() in {"r", "u", "user"}
+            and path_parts[2].lower() == "s"
+        ):
+            share_id = path_parts[3].strip()
+            if not share_id:
+                return None
+
+            return self._make_link_match(
+                original_url=original_url,
+                mirror_url=f"https://{self.MIRROR_DOMAINS['reddit']}/s/{share_id}",
+                dedup_key=f"reddit-share:{share_id.lower()}",
+            )
+
         # Gallery posts still map back to the post id.
         if len(path_parts) >= 2 and path_parts[0].lower() == "gallery":
             post_id = path_parts[1].lower().strip()
@@ -567,22 +585,51 @@ class Autolink(commands.Cog):
             getattr(message.guild, "id", None),
         )
 
-        try:
-            for chunk in chunks:
-                await message.reply(chunk, mention_author=False)
-            return True
+        for chunk in chunks:
+            try:
+                reference = message.to_reference(fail_if_not_exists=False)
+                await message.channel.send(
+                    chunk,
+                    reference=reference,
+                    mention_author=False,
+                )
 
-        except discord.Forbidden:
-            logger.warning(
-                "Missing permission to reply in guild=%s channel=%s",
-                getattr(message.guild, "id", None),
-                getattr(message.channel, "id", None),
-            )
-            return False
+            except discord.Forbidden:
+                logger.warning(
+                    "Missing permission to send mirror in guild=%s channel=%s",
+                    getattr(message.guild, "id", None),
+                    getattr(message.channel, "id", None),
+                )
+                return False
 
-        except discord.HTTPException:
-            logger.exception("Failed to send mirror reply for message %s", message.id)
-            return False
+            except discord.NotFound:
+                logger.warning(
+                    "Channel or message vanished while sending mirror for message=%s",
+                    message.id,
+                )
+                return False
+
+            except discord.HTTPException:
+                try:
+                    await message.channel.send(chunk)
+                except discord.Forbidden:
+                    logger.warning(
+                        "Missing permission to send fallback mirror in guild=%s channel=%s",
+                        getattr(message.guild, "id", None),
+                        getattr(message.channel, "id", None),
+                    )
+                    return False
+                except discord.NotFound:
+                    logger.warning(
+                        "Channel vanished while sending fallback mirror for message=%s",
+                        message.id,
+                    )
+                    return False
+                except discord.HTTPException:
+                    logger.exception("Failed to send mirror message for message %s", message.id)
+                    return False
+
+        return True
 
     async def _suppress_embeds_if_possible(self, message: discord.Message, can_manage_messages: bool) -> None:
         if not can_manage_messages:
@@ -596,6 +643,8 @@ class Autolink(commands.Cog):
                 getattr(message.guild, "id", None),
                 getattr(message.channel, "id", None),
             )
+        except discord.NotFound:
+            logger.debug("Message %s was deleted before embeds could be suppressed", message.id)
         except discord.HTTPException:
             logger.exception("Failed to suppress embeds for message %s", message.id)
 
@@ -683,8 +732,8 @@ def setup(bot: commands.Bot) -> None:
 #     from unittest.mock import AsyncMock, Mock, patch
 # except ImportError:
 #     pytest = None
-# 
-# 
+#
+#
 # if pytest is not None:
 #     @pytest.fixture
 #     def cog():
@@ -692,48 +741,48 @@ def setup(bot: commands.Bot) -> None:
 #             user=SimpleNamespace(id=12345),
 #             wait_until_ready=AsyncMock(),
 #         )
-# 
+#
 #         instance = Autolink(fake_bot)
 #         return instance
-# 
-# 
+#
+#
 #     def test_mark_and_is_processed_until_expiry(cog):
 #         guild_id = 1
 #         key = "youtube:abc123"
 #         now = 100.0
-# 
+#
 #         assert cog._is_processed(guild_id, key, now) is False
-# 
+#
 #         cog._mark_processed(guild_id, key, now)
-# 
+#
 #         assert cog._is_processed(guild_id, key, now + 1.0) is True
 #         assert cog._is_processed(guild_id, key, now + 299.999) is True
 #         assert cog._is_processed(guild_id, key, now + cog.CACHE_TTL_SECONDS) is False
 #         assert guild_id not in cog.processed_links_by_guild
-# 
-# 
+#
+#
 #     def test_prune_guild_cache_removes_expired_entries_and_lock(cog):
 #         guild_id = 42
 #         now = 500.0
-# 
+#
 #         cog._get_guild_lock(guild_id)
-# 
+#
 #         cog.processed_links_by_guild[guild_id] = {
 #             "a": now - 1,
 #             "b": now - 10,
 #         }
-# 
+#
 #         cog._prune_guild_cache(guild_id, now)
-# 
+#
 #         assert guild_id not in cog.processed_links_by_guild
 #         assert guild_id not in cog.guild_locks
-# 
-# 
+#
+#
 #     def test_prune_guild_cache_keeps_size_limit_and_removes_oldest(cog):
 #         guild_id = 99
 #         old_limit = cog.CACHE_SIZE_PER_GUILD
 #         cog.CACHE_SIZE_PER_GUILD = 3
-# 
+#
 #         try:
 #             cog.processed_links_by_guild[guild_id] = {
 #                 "k1": 10.0,
@@ -742,29 +791,29 @@ def setup(bot: commands.Bot) -> None:
 #                 "k4": 40.0,
 #                 "k5": 50.0,
 #             }
-# 
+#
 #             cog._prune_guild_cache(guild_id, now=0.0)
-# 
+#
 #             remaining = cog.processed_links_by_guild[guild_id]
 #             assert set(remaining.keys()) == {"k3", "k4", "k5"}
 #         finally:
 #             cog.CACHE_SIZE_PER_GUILD = old_limit
-# 
-# 
+#
+#
 #     def test_is_processed_removes_expired_entry_but_keeps_other_entries(cog):
 #         guild_id = 7
 #         now = 1000.0
-# 
+#
 #         cog.processed_links_by_guild[guild_id] = {
 #             "expired": now - 1,
 #             "alive": now + 100,
 #         }
-# 
+#
 #         assert cog._is_processed(guild_id, "expired", now) is False
 #         assert cog._is_processed(guild_id, "alive", now) is True
 #         assert "alive" in cog.processed_links_by_guild[guild_id]
-# 
-# 
+#
+#
 #     def make_message(
 #         *,
 #         guild_id=1,
@@ -773,20 +822,20 @@ def setup(bot: commands.Bot) -> None:
 #     ):
 #         perms = SimpleNamespace(send_messages=True, manage_messages=manage_messages)
 #         me = object()
-# 
+#
 #         guild = SimpleNamespace(
 #             id=guild_id,
 #             get_member=lambda _user_id: me,
 #             me=me,
 #         )
-# 
+#
 #         channel = SimpleNamespace(
 #             id=555,
 #             permissions_for=lambda _member: perms,
 #         )
-# 
+#
 #         author = SimpleNamespace(bot=False)
-# 
+#
 #         return SimpleNamespace(
 #             id=999,
 #             author=author,
@@ -797,69 +846,69 @@ def setup(bot: commands.Bot) -> None:
 #             type=discord.MessageType.default,
 #             jump_url="https://discord.com/channels/1/555/999",
 #         )
-# 
-# 
+#
+#
 #     @pytest.mark.asyncio
 #     async def test_cog_load_starts_cleanup_loop(cog):
 #         with patch.object(cog.cleanup_cache, "start", return_value=None) as start_mock:
 #             await cog.cog_load()
 #             start_mock.assert_called_once()
-# 
-# 
+#
+#
 #     @pytest.mark.asyncio
 #     async def test_on_message_failed_send_still_marks_processed(cog):
 #         msg = make_message()
-# 
+#
 #         link = LinkMatch(
 #             original_url="https://youtu.be/dQw4w9WgXcQ",
 #             mirror_url="https://koutu.be/watch?v=dQw4w9WgXcQ",
 #             dedup_key="youtube:dqw4w9wgxcq",
 #         )
-# 
+#
 #         cog._extract_supported_links = Mock(return_value=[link])
 #         cog._send_mirrors = AsyncMock(return_value=False)
 #         cog._suppress_embeds_if_possible = AsyncMock()
-# 
+#
 #         await cog.on_message(msg)
 #         await cog.on_message(msg)
-# 
+#
 #         cog._send_mirrors.assert_awaited_once()
 #         cog._suppress_embeds_if_possible.assert_not_awaited()
-# 
-# 
+#
+#
 #     @pytest.mark.asyncio
 #     async def test_on_message_concurrent_calls_only_send_once(cog):
 #         msg1 = make_message(guild_id=123)
 #         msg2 = make_message(guild_id=123)
-# 
+#
 #         link = LinkMatch(
 #             original_url="https://youtu.be/dQw4w9WgXcQ",
 #             mirror_url="https://koutu.be/watch?v=dQw4w9WgXcQ",
 #             dedup_key="youtube:dqw4w9wgxcq",
 #         )
-# 
+#
 #         cog._extract_supported_links = Mock(return_value=[link])
 #         cog._send_mirrors = AsyncMock(return_value=True)
 #         cog._suppress_embeds_if_possible = AsyncMock()
-# 
+#
 #         await asyncio.gather(cog.on_message(msg1), cog.on_message(msg2))
-# 
+#
 #         cog._send_mirrors.assert_awaited_once()
-# 
-# 
+#
+#
 #     @pytest.mark.asyncio
 #     async def test_on_message_ignores_bots_and_dms(cog):
 #         bot_msg = make_message()
 #         bot_msg.author.bot = True
-# 
+#
 #         dm_msg = make_message()
 #         dm_msg.guild = None
-# 
+#
 #         cog._extract_supported_links = Mock()
 #         cog._send_mirrors = AsyncMock()
-# 
+#
 #         await cog.on_message(bot_msg)
 #         await cog.on_message(dm_msg)
-# 
+#
 #         cog._extract_supported_links.assert_not_called()
 #         cog._send_mirrors.assert_not_awaited()
