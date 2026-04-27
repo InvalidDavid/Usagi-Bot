@@ -456,6 +456,114 @@ class User(commands.Cog):
         self.MAX_FIELDS_PER_EMBED = 20
         self.start_time = datetime.now(timezone.utc)
 
+        self._help_pages_cache: dict[bool, tuple[list[discord.Embed], dict[int, dict[str, object]]]] = {}
+
+    def invalidate_help_cache(self) -> None:
+        self._help_pages_cache.clear()
+
+    def build_help_pages(
+            self,
+            *,
+            include_owner: bool,
+    ) -> tuple[list[discord.Embed], dict[int, dict[str, object]]]:
+        embeds: list[discord.Embed] = []
+        page_info: dict[int, dict[str, object]] = {}
+        prefix_display = get_prefix_display(self.bot)
+
+        categories: list[tuple[str, list[tuple[str, str, Optional[int], str]]]] = []
+
+        main_cmds = []
+        for cmd in iter_main_commands(self.bot):
+            main_cmds.extend(gather_commands_recursive(cmd, include_owner=include_owner))
+
+        if main_cmds:
+            categories.append(("Main", main_cmds))
+
+        for cog_name, cog in self.bot.cogs.items():
+            if cog_name in OWNER_COGS and not include_owner:
+                continue
+
+            all_cmds = []
+            for cmd in getattr(cog, "get_commands", lambda: [])():
+                all_cmds.extend(gather_commands_recursive(cmd, include_owner=include_owner))
+
+            if all_cmds:
+                categories.append((cog_name, all_cmds))
+
+        for cog_name, all_cmds in categories:
+            all_cmds.sort(key=lambda item: item[0].lower())
+
+            chunks = [
+                all_cmds[i:i + self.MAX_FIELDS_PER_EMBED]
+                for i in range(0, len(all_cmds), self.MAX_FIELDS_PER_EMBED)
+            ]
+
+            total_pages = len(chunks)
+            cog_emoji = command_emoji(cog_name)
+
+            for page_num, chunk in enumerate(chunks, 1):
+                embed_index = len(embeds)
+
+                if total_pages > 1:
+                    title = f"📂 {cog_name} Commands (Page {page_num}/{total_pages})"
+                    description = (
+                        f"{cog_emoji} Commands from `{cog_name}`\n"
+                        f"Page `{page_num}` of `{total_pages}`"
+                    )
+                else:
+                    title = f"📂 {cog_name} Commands"
+                    description = f"{cog_emoji} All visible commands from `{cog_name}`"
+
+                embed = discord.Embed(
+                    title=title,
+                    description=description,
+                    color=discord.Color.blurple(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+
+                page_info[embed_index] = {
+                    "cog_name": cog_name,
+                    "page": page_num,
+                    "total_pages": total_pages,
+                }
+
+                for name, desc, cmd_id, kind in chunk:
+                    label = command_mention(
+                        name,
+                        cmd_id,
+                        kind=kind,
+                        prefix=prefix_display,
+                    )
+
+                    command_type = {
+                        "slash": "Slash",
+                        "prefix": "Prefix",
+                        "bridge": "Bridge",
+                    }.get(kind, "Command")
+
+                    embed.add_field(
+                        name=f"{command_emoji(name)} {label}",
+                        value=f"> `{command_type}` • {safe_plain(desc, limit=170)}",
+                        inline=False,
+                    )
+
+                embeds.append(embed)
+
+        return embeds, page_info
+
+    def get_cached_help_pages(
+            self,
+            *,
+            include_owner: bool,
+    ) -> tuple[list[discord.Embed], dict[int, dict[str, object]]]:
+        if include_owner not in self._help_pages_cache:
+            self._help_pages_cache[include_owner] = self.build_help_pages(include_owner=include_owner)
+
+        cached_embeds, cached_page_info = self._help_pages_cache[include_owner]
+
+        # Important: HelpView mutates embeds on timeout/footer, so every request needs copies.
+        return [embed.copy() for embed in cached_embeds], dict(cached_page_info)
+
     def format_timedelta(self, delta: timedelta) -> str:
         days = delta.days
         hours, remainder = divmod(delta.seconds, 3600)
@@ -885,88 +993,8 @@ class User(commands.Cog):
     async def help_command(self, ctx: discord.ApplicationContext):
         await ctx.defer(ephemeral=True)
 
-        embeds = []
-        page_info = {}
-        prefix_display = get_prefix_display(self.bot)
         include_owner = is_bot_owner(ctx.author.id)
-
-        categories = []
-
-        main_cmds = []
-        for cmd in iter_main_commands(self.bot):
-            main_cmds.extend(gather_commands_recursive(cmd, include_owner=include_owner))
-
-        if main_cmds:
-            categories.append(("Main", main_cmds))
-
-        for cog_name, cog in self.bot.cogs.items():
-            if cog_name in OWNER_COGS and not include_owner:
-                continue
-
-            all_cmds = []
-            for cmd in getattr(cog, "get_commands", lambda: [])():
-                all_cmds.extend(gather_commands_recursive(cmd, include_owner=include_owner))
-
-            if all_cmds:
-                categories.append((cog_name, all_cmds))
-
-        for cog_name, all_cmds in categories:
-            all_cmds.sort(key=lambda item: item[0].lower())
-
-            chunks = [
-                all_cmds[i:i + self.MAX_FIELDS_PER_EMBED]
-                for i in range(0, len(all_cmds), self.MAX_FIELDS_PER_EMBED)
-            ]
-
-            total_pages = len(chunks)
-            cog_emoji = command_emoji(cog_name)
-
-            for page_num, chunk in enumerate(chunks, 1):
-                embed_index = len(embeds)
-
-                if total_pages > 1:
-                    title = f"📂 {cog_name} Commands (Page {page_num}/{total_pages})"
-                    description = (
-                        f"{cog_emoji} Commands from `{cog_name}`\n"
-                        f"Page `{page_num}` of `{total_pages}`"
-                    )
-                else:
-                    title = f"📂 {cog_name} Commands"
-                    description = f"{cog_emoji} All visible commands from `{cog_name}`"
-
-                embed = discord.Embed(
-                    title=title,
-                    description=description,
-                    color=discord.Color.blurple(),
-                    timestamp=datetime.now(timezone.utc),
-                )
-
-                page_info[embed_index] = {
-                    "cog_name": cog_name,
-                    "page": page_num,
-                    "total_pages": total_pages,
-                }
-
-                for name, desc, cmd_id, kind in chunk:
-                    label = command_mention(
-                        name,
-                        cmd_id,
-                        kind=kind,
-                        prefix=prefix_display,
-                    )
-                    command_type = {
-                        "slash": "Slash",
-                        "prefix": "Prefix",
-                        "bridge": "Bridge",
-                    }.get(kind, "Command")
-
-                    embed.add_field(
-                        name=f"{command_emoji(name)} {label}",
-                        value=f"> `{command_type}` • {safe_plain(desc, limit=170)}",
-                        inline=False,
-                    )
-
-                embeds.append(embed)
+        embeds, page_info = self.get_cached_help_pages(include_owner=include_owner)
 
         if not embeds:
             await ctx.respond("No visible commands found.", ephemeral=True)
@@ -985,11 +1013,11 @@ class User(commands.Cog):
             page_info=page_info,
             timeout=HELP_TIMEOUT_SECONDS,
         )
+
         msg = await ctx.respond(embed=embeds[0], view=view, ephemeral=True)
 
         with contextlib.suppress(discord.HTTPException, discord.NotFound, AttributeError):
             view.message = await msg.original_response()
-
 
 def setup(bot):
     bot.add_cog(User(bot))
