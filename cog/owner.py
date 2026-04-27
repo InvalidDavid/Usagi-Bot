@@ -157,6 +157,11 @@ class OwnerC(commands.Cog):
     def __init__(self, bot: discord.Bot):
         self.bot = bot
 
+    def _invalidate_help_cache(self) -> None:
+        user_cog = self.bot.get_cog("User")
+        if user_cog is not None and hasattr(user_cog, "invalidate_help_cache"):
+            user_cog.invalidate_help_cache()
+
     owner = SlashCommandGroup("owner", "Owner commands")
     cog = owner.create_subgroup("cog", "Cog management")
 
@@ -231,6 +236,7 @@ class OwnerC(commands.Cog):
             return
         try:
             self.bot.load_extension(module(name))
+            self._invalidate_help_cache()
             await ctx.respond(f"✅ `{name}` loaded", ephemeral=True)
         except Exception as e:
             logger.exception("Failed to load cog %s", name)
@@ -254,6 +260,7 @@ class OwnerC(commands.Cog):
             return
         try:
             self.bot.unload_extension(module(name))
+            self._invalidate_help_cache()
             await ctx.respond(f"🔴 `{name}` unloaded", ephemeral=True)
         except Exception as e:
             logger.exception("Failed to unload cog %s", name)
@@ -280,6 +287,7 @@ class OwnerC(commands.Cog):
                 self.bot.reload_extension(module(name))
             else:
                 self.bot.load_extension(module(name))
+            self._invalidate_help_cache()
             await ctx.respond(f"🔄 `{name}` reloaded", ephemeral=True)
         except Exception as e:
             logger.exception("Failed to reload cog %s", name)
@@ -303,6 +311,7 @@ class OwnerC(commands.Cog):
                 else:
                     self.bot.load_extension(module(cog))
                 ok.append(cog)
+                self._invalidate_help_cache()
             except Exception as e:
                 logger.exception("Failed to reload cog %s during reload_all", cog)
                 fail.append(f"{cog}: {e}")
