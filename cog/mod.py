@@ -95,138 +95,133 @@ class ModC(commands.Cog):
     # async def on_thread_create(self, thread: discord.Thread):
     #     if not isinstance(thread.parent, discord.ForumChannel):
     #         return
-    #
-    #     THREADID = 1488486275898933288
-    #     if thread.parent.id != THREADID:
+    # 
+    #     if thread.parent.id != 1488486275898933288:
     #         return
-    #
+    # 
     #     pin_notice = None
-    #
-    #     try:
-    #         starter_msg = await thread.fetch_message(thread.id)
-    #         await starter_msg.pin()
-    #     except discord.Forbidden:
-    #         pin_notice = "Couldn't pin starter message, missing permissions."
-    #     except discord.NotFound:
-    #         pin_notice = "Couldn't find the starter message to pin."
-    #     except discord.HTTPException:
-    #         pin_notice = "Couldn't pin starter message due to a Discord API error."
-    #
+    # 
+    #     me = thread.guild.me
+    #     if me is None and self.bot.user is not None:
+    #         me = thread.guild.get_member(self.bot.user.id)
+    # 
+    #     if me is None:
+    #         pin_notice = "Couldn't pin starter message, could not resolve bot member."
+    #     else:
+    #         permissions = thread.permissions_for(me)
+    # 
+    #         can_pin = (
+    #                 getattr(permissions, "pin_messages", False)
+    #                 or getattr(permissions, "manage_messages", False)
+    #         )
+    # 
+    #         if not can_pin:
+    #             pin_notice = "Couldn't pin starter message, missing pin/manage messages permission."
+    #         else:
+    #             starter_msg = None
+    # 
+    #             for attempt in range(5):
+    #                 try:
+    #                     starter_msg = await thread.fetch_message(thread.id)
+    #                     break
+    #                 except discord.NotFound:
+    #                     await asyncio.sleep(1 + attempt)
+    #                 except discord.Forbidden:
+    #                     pin_notice = "Couldn't pin starter message, missing permissions."
+    #                     break
+    #                 except discord.HTTPException:
+    #                     await asyncio.sleep(1 + attempt)
+    # 
+    #             if starter_msg is None and pin_notice is None:
+    #                 pin_notice = "Couldn't find the starter message to pin."
+    # 
+    #             if starter_msg is not None:
+    #                 try:
+    #                     await starter_msg.pin(
+    #                         reason=f"Auto-pin support starter message in thread {thread.id}"
+    #                     )
+    #                 except discord.Forbidden:
+    #                     pin_notice = "Couldn't pin starter message, missing permissions."
+    #                 except discord.NotFound:
+    #                     pin_notice = "Couldn't find the starter message to pin."
+    #                 except discord.HTTPException as e:
+    #                     pin_notice = f"Couldn't pin starter message due to a Discord API error: {e}"
+    # 
     #     embed = discord.Embed(
     #         title="Support Channel",
     #         description=(
     #             "Rules for asking for support:\n"
-    #             "- Provide as much details as you can about the issue. "
-    #             "(For example a step-by-step way on how to encounter that issue)\n"
-    #             "- Screenshots or screen recordings can help us understand the issue better, "
-    #             "so it's recommended you send at least one in your post.\n"
-    #             "- Check <#1488492402623905913>."
+    #             "1. - <#1484655685542350990>"
+    #             "2. - <#1488492402623905913>."
     #         ),
     #         color=discord.Color.blurple()
     #     )
-    #     embed.set_footer(text="You can use =close to close your post.")
-    #
+    #     embed.set_footer(text="You can use /close to close your post.")
+    # 
     #     content = f"<@{thread.owner_id}>"
     #     if pin_notice:
     #         content += f"\n-# {pin_notice}"
-    #
-    #     for _ in range(5):
+    # 
+    #     for attempt in range(5):
     #         try:
     #             await thread.send(content=content, embed=embed)
     #             return
     #         except discord.Forbidden as e:
     #             if "40058" in str(e):
-    #                 await asyncio.sleep(1)
+    #                 await asyncio.sleep(1 + attempt)
     #                 continue
     #             raise
     #         except discord.HTTPException:
-    #             await asyncio.sleep(1)
+    #             await asyncio.sleep(1 + attempt)
 
     @mod.command(name="purge", description="Clear messages")
     @commands.guild_only()
     @commands.cooldown(1, 10, commands.BucketType.user)
     @commands.has_permissions(manage_messages=True)
-    async def purge(self, ctx: discord.ApplicationContext, amount: int):
+    @commands.bot_has_permissions(manage_messages=True, read_message_history=True)
+    async def purge(
+            self,
+            ctx: discord.ApplicationContext,
+            amount: Option(int, "Amount of messages to delete", min_value=1, max_value=100),
+    ):
         await ctx.defer(ephemeral=True)
-
-        if ctx.guild is None:
-            await ctx.followup.send("This command can only be used in a server.", ephemeral=True)
-            return
-
-        if amount < 1 or amount > 100:
-            await ctx.followup.send("Amount must be between 1 and 100.", ephemeral=True)
-            return
 
         channel = ctx.channel
         if not isinstance(channel, discord.TextChannel):
             await ctx.followup.send("This command can only be used in text channels.", ephemeral=True)
             return
 
-        me = ctx.guild.me
-        if me is None:
-            await ctx.followup.send("Could not resolve my member object in this server.", ephemeral=True)
+        audit_reason = f"Purge by {ctx.author} ({ctx.author.id})"
+
+        deleted = await channel.purge(
+            limit=amount,
+            check=lambda msg: not msg.pinned,
+            bulk=True,
+            reason=audit_reason,
+        )
+
+        if not deleted:
+            await ctx.followup.send("No eligible messages found to delete.", ephemeral=True)
             return
 
-        if not channel.permissions_for(me).manage_messages:
-            await ctx.followup.send("I need `Manage Messages` permission.", ephemeral=True)
-            return
+        authors = {msg.author.id for msg in deleted}
+        bot_count = sum(1 for msg in deleted if msg.author.bot)
+        user_count = len(deleted) - bot_count
 
-        try:
-            to_delete: list[discord.Message] = []
-            cutoff = discord.utils.utcnow() - timedelta(days=14)
+        oldest_dt = min(msg.created_at for msg in deleted).astimezone(timezone.utc)
+        newest_dt = max(msg.created_at for msg in deleted).astimezone(timezone.utc)
 
-            async for msg in channel.history(limit=min(amount * 5, 500)):
-                if len(to_delete) >= amount:
-                    break
-
-                if msg.pinned:
-                    continue
-
-                if msg.created_at < cutoff:
-                    continue
-
-                to_delete.append(msg)
-
-            if not to_delete:
-                await ctx.followup.send(
-                    "No eligible messages found to delete. Messages older than 14 days cannot be bulk deleted.",
-                    ephemeral=True,
-                )
-                return
-
-            if len(to_delete) == 1:
-                await to_delete[0].delete()
-            else:
-                await channel.delete_messages(to_delete)
-
-            authors = {msg.author.id for msg in to_delete}
-            author_count = len(authors)
-
-            oldest_dt = min(to_delete, key=lambda m: m.created_at).created_at.astimezone(timezone.utc)
-            newest_dt = max(to_delete, key=lambda m: m.created_at).created_at.astimezone(timezone.utc)
-
-            oldest_ts = int(oldest_dt.timestamp())
-            newest_ts = int(newest_dt.timestamp())
-
-            bot_count = sum(1 for msg in to_delete if msg.author.bot)
-            user_count = len(to_delete) - bot_count
-
-            await ctx.followup.send(
-                (
-                    f"🧹 **Purge completed**\n"
-                    f"- Deleted: `{len(to_delete)}` messages\n"
-                    f"- Unique authors: `{author_count}`\n"
-                    f"- Users: `{user_count}` | Bots: `{bot_count}`\n"
-                    f"- Time range: <t:{oldest_ts}:F> → <t:{newest_ts}:F>"
-                ),
-                ephemeral=True,
-                delete_after=10,
-            )
-
-        except discord.Forbidden:
-            await ctx.followup.send("Missing permissions to delete messages.", ephemeral=True)
-        except discord.HTTPException:
-            await ctx.followup.send("Failed to delete messages due to a Discord API error.", ephemeral=True)
+        await ctx.followup.send(
+            (
+                f"🧹 **Purge completed**\n"
+                f"- Deleted: `{len(deleted)}` messages\n"
+                f"- Unique authors: `{len(authors)}`\n"
+                f"- Users: `{user_count}` | Bots: `{bot_count}`\n"
+                f"- Time range: <t:{int(oldest_dt.timestamp())}:F> → <t:{int(newest_dt.timestamp())}:F>"
+            ),
+            ephemeral=True,
+            delete_after=10,
+        )
 
     @forum.command(description="Change a thread's tag")
     @commands.guild_only()
