@@ -3,8 +3,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # line 803 gets confused due to line 9, don't remove it.
 from dataclasses import dataclass
-from typing import Optional
-from datetime import datetime, timedelta
 
 from utils.imports import *
 
@@ -103,7 +101,7 @@ def parse_time(text: str) -> Optional[datetime]:
         return None
 
     raw = text.strip().lower()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     duration_input = raw[3:] if raw.startswith("in ") else raw
     seconds = parse_duration(duration_input)
@@ -380,7 +378,7 @@ class Reminder(commands.Cog):
         self.wake_worker()
 
         if self.scheduler.running:
-            with contextlib.suppress(discord.HTTPException):
+            with contextlib.suppress(Exception):
                 self.scheduler.shutdown(wait=False)
 
         if self.worker_task and not self.worker_task.done():
@@ -423,10 +421,11 @@ class Reminder(commands.Cog):
                 raise
 
     async def _open_db(self):
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
         self.db = await aiosqlite.connect(DB_PATH)
         self.db.row_factory = aiosqlite.Row
 
-        # WAL improves read/write behavior for this async reminder DB.
         await self.db.execute("PRAGMA journal_mode=WAL")
         await self.db.execute("PRAGMA synchronous=NORMAL")
         await self.db.execute("PRAGMA foreign_keys=ON")
@@ -687,7 +686,7 @@ class Reminder(commands.Cog):
                 logger.info("Cleanup skipped (already done within 24h)")
                 return
 
-            cutoff = now - 86400
+            cutoff = now - 7 * 86400
 
             if self.db is None:
                 return
@@ -1123,6 +1122,9 @@ class Reminder(commands.Cog):
     async def status(self, ctx: discord.ApplicationContext):
         row_pending = await self._fetchone("SELECT COUNT(*) AS count FROM reminders WHERE status='pending'")
         row_processing = await self._fetchone("SELECT COUNT(*) AS count FROM reminders WHERE status='processing'")
+        row_failed = await self._fetchone("SELECT COUNT(*) AS count FROM reminders WHERE status='failed'")
+        row_done = await self._fetchone("SELECT COUNT(*) AS count FROM reminders WHERE status='done'")
+        row_cancelled = await self._fetchone("SELECT COUNT(*) AS count FROM reminders WHERE status='cancelled'")
         next_run = self.next_due_hint
 
         worker_alive = self.worker_task is not None and not self.worker_task.done()
@@ -1136,6 +1138,9 @@ class Reminder(commands.Cog):
         embed.add_field(name="Scheduler", value="✅ Running" if scheduler_running else "❌ Not Running", inline=True)
         embed.add_field(name="Pending", value=str(row_pending["count"]), inline=True)
         embed.add_field(name="Processing", value=str(row_processing["count"]), inline=True)
+        embed.add_field(name="Done", value=str(row_done["count"]), inline=True)
+        embed.add_field(name="Failed", value=str(row_failed["count"]), inline=True)
+        embed.add_field(name="Cancelled", value=str(row_cancelled["count"]), inline=True)
         embed.add_field(
             name="Next Reminder",
             value=f"<t:{next_run}:f> (<t:{next_run}:R>)" if next_run else "None",
