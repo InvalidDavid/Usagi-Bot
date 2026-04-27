@@ -510,25 +510,12 @@ class Autolink(commands.Cog):
         if not self._is_reddit_share_match(link):
             return link
 
-        logger.info(
-            "Reddit share resolver triggered | original=%s | dedup_before=%s",
-            link.original_url,
-            link.dedup_key,
-        )
-
         try:
             session = await self._get_http_session()
 
             async with session.get(link.original_url, allow_redirects=True) as response:
                 final_url = str(response.url)
                 status = response.status
-
-                logger.info(
-                    "Reddit share resolved HTTP | status=%s | original=%s | final=%s",
-                    status,
-                    link.original_url,
-                    final_url,
-                )
 
                 if status == 403:
                     logger.warning(
@@ -548,12 +535,6 @@ class Autolink(commands.Cog):
             resolved = self._build_link_match(final_url, parsed)
 
             if resolved is not None and resolved.dedup_key.startswith("reddit:"):
-                logger.info(
-                    "Reddit share converted from redirect | original=%s | final=%s | mirror_after=%s",
-                    link.original_url,
-                    final_url,
-                    resolved.mirror_url,
-                )
 
                 return LinkMatch(
                     original_url=link.original_url,
@@ -567,13 +548,6 @@ class Autolink(commands.Cog):
 
             if post_id is not None:
                 mirror_url = f"https://{self.MIRROR_DOMAINS['reddit']}/comments/{post_id}"
-
-                logger.info(
-                    "Reddit share converted from HTML/body | original=%s | final=%s | mirror_after=%s",
-                    link.original_url,
-                    final_url,
-                    mirror_url,
-                )
 
                 return LinkMatch(
                     original_url=link.original_url,
@@ -602,13 +576,6 @@ class Autolink(commands.Cog):
         links = list(links)
 
         reddit_share_count = sum(1 for link in links if self._is_reddit_share_match(link))
-
-        logger.info(
-            "Reddit share resolver batch | total_links=%s | reddit_share_links=%s | dedup_keys=%s",
-            len(links),
-            reddit_share_count,
-            [link.dedup_key for link in links],
-        )
 
         resolved_links: list[LinkMatch] = []
 
