@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from utils.imports import *
-from utils.secrets import GUILDS_ID, OWNER, TOKEN
+from utils.secrets import OWNER, TOKEN
 
 # ---------------- PATHS ----------------
 # automatically creates folders on bot start
@@ -335,8 +336,24 @@ def format_ping_ms(latency: Any) -> str:
     return f"{ping} ms" if ping is not None else "N/A"
 
 
-def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
-    bot = commands.Bot(
+class UsagiBot(commands.Bot):
+    global_cache: "GlobalCache"
+    cache: "GlobalCache"
+
+    cache_get: Callable[..., Awaitable[Any]]
+    cache_set: Callable[..., Awaitable[Any]]
+    cache_has: Callable[..., Awaitable[bool]]
+    cache_delete: Callable[..., Awaitable[bool]]
+    cache_pop: Callable[..., Awaitable[Any]]
+    cache_clear: Callable[..., Awaitable[int]]
+    cache_cleanup: Callable[..., Awaitable[int]]
+    cache_keys: Callable[..., Awaitable[list[str]]]
+    cache_stats: Callable[..., Awaitable[dict[str, Any]]]
+
+    startup_logged: bool
+
+def build_bot() -> tuple[UsagiBot, Callable[[], Awaitable[None]]]:
+    bot = UsagiBot(
         intents=discord.Intents.all(),
         sync_commands=True,
         owner_ids=OWNER,
@@ -355,7 +372,7 @@ def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
     bot.cache_cleanup = bot.global_cache.cleanup
     bot.cache_keys = bot.global_cache.keys
     bot.cache_stats = bot.global_cache.stats
-    bot._startup_logged = False
+    bot.startup_logged = False
 
     @bot.event
     async def on_ready() -> None:
@@ -390,9 +407,9 @@ def build_bot() -> tuple[commands.Bot, Callable[[], Awaitable[None]]]:
             logger.info(f"║ {line:<{width}} ║")
         logger.info(f"╚{'═' * (width + 2)}╝\n")
 
-        if not bot._startup_logged:
+        if not bot.startup_logged:
             logger.info("Bot successfully started.")
-            bot._startup_logged = True
+            bot.startup_logged = True
         else:
             logger.info("Bot reconnected and is ready.")
 
