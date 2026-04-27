@@ -483,7 +483,7 @@ class User(commands.Cog):
         except (discord.HTTPException, discord.NotFound, discord.Forbidden):
             return None
 
-    async def build_userinfo_view(self, member: discord.Member, requester_id: int) -> InfoContainerView:
+    async def build_userinfo_view(self, member: discord.Member) -> InfoContainerView:
         profile = await self.fetch_user_profile(member.id)
         now = datetime.now(timezone.utc)
         color = member.color if member.color and member.color.value else Color.blurple()
@@ -552,8 +552,6 @@ class User(commands.Cog):
             f"- **Key perms:** `{safe_plain(important_permissions(member), limit=300)}`"
         )
 
-        footer = f"-# Requested by {safe_md(member.guild.get_member(requester_id) or requester_id, limit=80)} • Updated {format_dt(now, 'R')}"
-
         container = Container(color=color)
         container.add_section(
             TextDisplay(header),
@@ -564,7 +562,6 @@ class User(commands.Cog):
         container.add_separator(divider=True, spacing=SeparatorSpacingSize.small)
         container.add_text(server_text)
         container.add_separator(divider=False, spacing=SeparatorSpacingSize.small)
-        container.add_text(footer)
 
         buttons = [
             UIButton(label="Avatar", emoji="🖼️", style=ButtonStyle.link, url=member.display_avatar.url)
@@ -577,7 +574,7 @@ class User(commands.Cog):
         container.add_row(*buttons[:5])
         return InfoContainerView(container)
 
-    async def build_serverinfo_view(self, guild: Optional[discord.Guild], requester_id: int) -> InfoContainerView:
+    async def build_serverinfo_view(self, guild: Optional[discord.Guild]) -> InfoContainerView:
         if guild is None:
             container = Container(color=Color.red())
             container.add_text("## 🏠 Server Info\nThis command can only be used inside a server.")
@@ -639,8 +636,6 @@ class User(commands.Cog):
             f"- **Features:** `{safe_plain(limited_join(features, limit=16), limit=700)}`"
         )
 
-        footer = f"-# Requested by {safe_md(guild.get_member(requester_id) or requester_id, limit=80)} • Updated {format_dt(now, 'R')}"
-
         container = Container(color=Color.blurple())
         if guild.icon:
             container.add_section(
@@ -655,7 +650,6 @@ class User(commands.Cog):
             container.add_text(text)
 
         container.add_separator(divider=False, spacing=SeparatorSpacingSize.small)
-        container.add_text(footer)
 
         buttons = []
         if guild.icon:
@@ -671,113 +665,215 @@ class User(commands.Cog):
 
     @slash_command(name="about", description="Detailed stats about the bot.")
     async def about(self, ctx: discord.ApplicationContext):
+        await ctx.defer()
+
+        now = datetime.now(timezone.utc)
+        uptime = now - self.start_time
+        command_start = time.perf_counter()
+
+        created_at = self.bot.user.created_at if self.bot.user else None
+        created_str = (
+            "Not available"
+            if not created_at
+            else f"{format_dt(created_at, 'F')} ({format_dt(created_at, 'R')})"
+        )
+
+        ws_ping = round(self.bot.latency * 1000, 2)
+
+        api_start = time.perf_counter()
         try:
-            await ctx.defer()
+            await self.bot.http.request(discord.http.Route("GET", "/gateway"))
+            api_ping = round((time.perf_counter() - api_start) * 1000, 2)
+        except Exception:
+            api_ping = None
 
-            now = datetime.now(timezone.utc)
-            uptime = now - self.start_time
-            command_start = time.perf_counter()
+        cmd_latency = round((time.perf_counter() - command_start) * 1000, 2)
 
-            created_at = self.bot.user.created_at if self.bot.user else None
-            created_str = "Not available" if not created_at else f"{format_dt(created_at, 'F')} ({format_dt(created_at, 'R')})"
-            ws_ping = round(self.bot.latency * 1000, 2)
+        embed = discord.Embed(
+            title="🤖 Bot-Infos",
+            description=f"# [Support / GitHub]({SUPPORT_SERVER})",
+            color=discord.Color.blurple(),
+            timestamp=now,
+        )
 
-            api_start = time.perf_counter()
-            try:
-                await self.bot.http.request(discord.http.Route("GET", "/gateway"))
-                api_ping = round((time.perf_counter() - api_start) * 1000, 2)
-            except Exception:
-                api_ping = None
+        if self.bot.user:
+            embed.set_thumbnail(url=self.bot.user.display_avatar.url)
 
-            cmd_latency = round((time.perf_counter() - command_start) * 1000, 2)
+        embed.add_field(
+            name="🆔 Bot ID",
+            value=f"```{self.bot.user.id if self.bot.user else 'N/A'}```",
+            inline=True,
+        )
+        embed.add_field(
+            name="📛 Bot Name",
+            value=f"```{self.bot.user}```",
+            inline=True,
+        )
+        embed.add_field(
+            name="📅 Bot created",
+            value=created_str,
+            inline=False,
+        )
+        embed.add_field(
+            name="🕰️ Bot Uptime",
+            value=(
+                f"```{self.format_timedelta(uptime)}```"
+                f"Last restart: {format_dt(self.start_time, 'F')} ({format_dt(self.start_time, 'R')})"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🏓 WebSocket Ping",
+            value=f"```{ws_ping} ms```",
+            inline=True,
+        )
+        embed.add_field(
+            name="📡 API Ping",
+            value=f"```{api_ping if api_ping is not None else 'Error'} ms```",
+            inline=True,
+        )
+        embed.add_field(
+            name="⚡ Command-Reaction Time",
+            value=f"```{cmd_latency} ms```",
+            inline=True,
+        )
+        embed.add_field(
+            name="🌍 Servers",
+            value=f"```{len(getattr(self.bot, 'guilds', []))}```",
+            inline=True,
+        )
+        embed.add_field(
+            name="👥 Cached Users",
+            value=f"```{len(getattr(self.bot, 'users', []))}```",
+            inline=True,
+        )
+        embed.add_field(
+            name="🧩 Cogs",
+            value=f"```{len(getattr(self.bot, 'cogs', {}))}```",
+            inline=True,
+        )
+        embed.add_field(
+            name="📚 Commands",
+            value=f"```{self.visible_command_count(include_owner=is_bot_owner(ctx.author.id))}```",
+            inline=True,
+        )
 
-            embed = discord.Embed(
-                title="🤖 Bot Info",
-                color=discord.Color.blurple(),
-                timestamp=now,
-            )
+        if is_bot_owner(ctx.author.id):
+            process = psutil.Process(os.getpid())
+            ram = psutil.virtual_memory()
 
-            if self.bot.user:
-                embed.set_thumbnail(url=self.bot.user.display_avatar.url)
+            shard_count = getattr(self.bot, "shard_count", None)
+            shard_id = getattr(ctx.guild, "shard_id", None) if ctx.guild else None
 
-            embed.add_field(name="🆔 Bot ID", value=f"```{self.bot.user.id if self.bot.user else 'N/A'}```", inline=True)
-            embed.add_field(name="📛 Bot Name", value=f"```{self.bot.user}```", inline=True)
-            embed.add_field(name="📅 Created", value=created_str, inline=False)
+            cache_stats = None
+            if hasattr(self.bot, "cache_stats"):
+                cache_stats = await self.bot.cache_stats()
+
             embed.add_field(
-                name="🕰️ Uptime",
-                value=f"```{self.format_timedelta(uptime)}```Last restart: {format_dt(self.start_time, 'F')} ({format_dt(self.start_time, 'R')})",
-                inline=False,
-            )
-            embed.add_field(name="🏓 WebSocket", value=f"```{ws_ping} ms```", inline=True)
-            embed.add_field(name="📡 API", value=f"```{api_ping if api_ping is not None else 'Error'} ms```", inline=True)
-            embed.add_field(name="⚡ Command", value=f"```{cmd_latency} ms```", inline=True)
-            embed.add_field(
-                name="📊 Scale",
-                value=(
-                    f"Servers: `{len(getattr(self.bot, 'guilds', []))}`\n"
-                    f"Users: `{len(getattr(self.bot, 'users', []))}`\n"
-                    f"Cogs: `{len(getattr(self.bot, 'cogs', {}))}`\n"
-                    f"Commands: `{self.visible_command_count(include_owner=is_bot_owner(ctx.author.id))}`"
-                ),
+                name="💻 System CPU",
+                value=f"```{psutil.cpu_percent(interval=0.1):.1f}%```",
                 inline=True,
             )
+            embed.add_field(
+                name="⚙️ Process CPU",
+                value=f"```{process.cpu_percent(interval=0.1):.1f}%```",
+                inline=True,
+            )
+            embed.add_field(
+                name="🧠 System RAM",
+                value=f"```{ram.percent:.2f}%```",
+                inline=True,
+            )
+            embed.add_field(
+                name="📦 Process RAM",
+                value=f"```{process.memory_info().rss / 1024 / 1024:.1f} MiB```",
+                inline=True,
+            )
+            embed.add_field(
+                name="🧵 Threads",
+                value=f"```{process.num_threads()}```",
+                inline=True,
+            )
+            embed.add_field(
+                name="🆔 PID",
+                value=f"```{process.pid}```",
+                inline=True,
+            )
+            embed.add_field(
+                name="🖥️ Platform",
+                value=f"```{platform.system()} {platform.release()}```",
+                inline=True,
+            )
+            embed.add_field(
+                name="🏗️ Machine",
+                value=f"```{platform.machine() or 'N/A'}```",
+                inline=True,
+            )
+            embed.add_field(
+                name="🐍 Python",
+                value=f"```{platform.python_version()}```",
+                inline=True,
+            )
+            embed.add_field(
+                name="📦 Py-cord",
+                value=f"```{discord.__version__}```",
+                inline=True,
+            )
+            embed.add_field(
+                name="🧩 Shard",
+                value=(
+                    f"```ID: {shard_id if shard_id is not None else 'N/A'} / "
+                    f"Count: {shard_count if shard_count is not None else 'N/A'}```"
+                ),
+                inline=False,
+            )
 
-            if is_bot_owner(ctx.author.id):
-                process = psutil.Process(os.getpid())
-                ram = psutil.virtual_memory()
+            if cache_stats:
                 embed.add_field(
-                    name="👑 Owner Diagnostics",
+                    name="🗃️ Global Cache",
                     value=(
-                        f"CPU: `{psutil.cpu_percent(interval=0.1):.1f}%`\n"
-                        f"RAM: `{ram.percent:.2f}%`\n"
-                        f"Process RAM: `{process.memory_info().rss / 1024 / 1024:.1f} MiB`\n"
-                        f"Platform: `{platform.system()} {platform.release()}`\n"
-                        f"Python: `{platform.python_version()}`\n"
-                        f"Py-cord: `{discord.__version__}`"
+                        "```"
+                        f"Entries: {cache_stats['entries']} / {cache_stats['max_entries']}\n"
+                        f"TTL entries: {cache_stats['ttl_entries']}\n"
+                        f"Persistent: {cache_stats['persistent_entries']}\n"
+                        f"Default TTL: {cache_stats['default_ttl']}\n"
+                        f"Cleanup: {cache_stats['cleanup_interval']}s"
+                        "```"
                     ),
                     inline=False,
                 )
 
-            embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
-            await ctx.respond(embed=embed, view=AboutView())
+        embed.set_footer(
+            text=f"Requested by {ctx.author}",
+            icon_url=ctx.author.display_avatar.url,
+        )
 
-        except Exception as e:
-            logger.exception("Error in /about")
-            await ctx.respond(f"Error: {e}", ephemeral=True)
+        await ctx.respond(embed=embed, view=AboutView())
 
     @slash_command(name="userinfo", description="Show compact information about a server member.")
     @commands.guild_only()
     async def userinfo(
-        self,
-        ctx: discord.ApplicationContext,
-        member: Option(discord.Member, "User to inspect", required=False) = None,
+            self,
+            ctx: discord.ApplicationContext,
+            member: Option(discord.Member, "User to inspect", required=False) = None,
     ):
-        try:
-            await ctx.defer()
+        await ctx.defer()
 
-            target = member or ctx.author
-            if not isinstance(target, discord.Member):
-                await ctx.respond("Could not resolve that user as a server member.", ephemeral=True)
-                return
+        target = member or ctx.author
+        if not isinstance(target, discord.Member):
+            await ctx.respond("Could not resolve that user as a server member.", ephemeral=True)
+            return
 
-            view = await self.build_userinfo_view(target, requester_id=ctx.author.id)
-            await ctx.respond(view=view, allowed_mentions=discord.AllowedMentions.none())
-
-        except Exception as e:
-            logger.exception("Error in /userinfo")
-            await ctx.respond(f"Error: {e}", ephemeral=True)
+        view = await self.build_userinfo_view(target)
+        await ctx.respond(view=view, allowed_mentions=discord.AllowedMentions.none())
 
     @slash_command(name="serverinfo", description="Show compact information about this server.")
     @commands.guild_only()
     async def serverinfo(self, ctx: discord.ApplicationContext):
-        try:
-            await ctx.defer()
-            view = await self.build_serverinfo_view(ctx.guild, requester_id=ctx.author.id)
-            await ctx.respond(view=view, allowed_mentions=discord.AllowedMentions.none())
+        await ctx.defer()
 
-        except Exception as e:
-            logger.exception("Error in /serverinfo")
-            await ctx.respond(f"Error: {e}", ephemeral=True)
+        view = await self.build_serverinfo_view(ctx.guild)
+        await ctx.respond(view=view, allowed_mentions=discord.AllowedMentions.none())
 
     @slash_command(name="help", description="Show all Slash commands that you can use.")
     async def help_command(self, ctx: discord.ApplicationContext):
@@ -825,7 +921,7 @@ class User(commands.Cog):
                 if total_pages > 1:
                     title = f"📂 {cog_name} Commands (Page {page_num}/{total_pages})"
                     description = (
-                        f"{cog_emoji} Commands from `{cog_name}`"
+                        f"{cog_emoji} Commands from `{cog_name}`\n"
                         f"Page `{page_num}` of `{total_pages}`"
                     )
                 else:
