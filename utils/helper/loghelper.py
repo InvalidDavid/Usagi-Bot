@@ -354,48 +354,6 @@ class LogsHelper:
 
         return ", ".join(f"`{name}`" for name in sorted(enabled)) if enabled else "None"
 
-    async def _find_recent_guild_audit_entry(
-        self,
-        guild: discord.Guild,
-        *,
-        action: discord.AuditLogAction,
-        delay: Optional[float] = None,
-    ) -> Optional[discord.AuditLogEntry]:
-        actual_delay = self.AUDIT_LOG_DELAY if delay is None else delay
-
-        try:
-            if actual_delay > 0:
-                await asyncio.sleep(actual_delay)
-
-            async for entry in guild.audit_logs(limit=10, action=action):
-                if self._audit_target_id(entry) != guild.id:
-                    continue
-                if not self._audit_entry_is_fresh(entry, max_age=self.AUDIT_LOG_MAX_AGE):
-                    continue
-                return entry
-        except (discord.Forbidden, discord.HTTPException):
-            return None
-
-        return None
-
-    async def _find_recent_scheduled_event_audit_entry(
-        self,
-        guild: discord.Guild,
-        *,
-        event_id: int,
-        action: discord.AuditLogAction,
-        delay: Optional[float] = None,
-    ) -> Optional[discord.AuditLogEntry]:
-        actual_delay = self.AUDIT_LOG_DELAY if delay is None else delay
-        return await self._find_recent_audit_entry_for_target(
-            guild,
-            target_id=event_id,
-            actions=action,
-            delay=actual_delay,
-            limit=10,
-            max_age=self.AUDIT_LOG_MAX_AGE,
-        )
-
     @staticmethod
     def _roles_without_default(member: discord.Member) -> list[discord.Role]:
         return [role for role in member.roles if role != member.guild.default_role]
@@ -448,6 +406,230 @@ class LogsHelper:
         target = getattr(entry, "target", None)
         return getattr(target, "id", None)
 
+    def _store_recent_audit_entry(self, entry: discord.AuditLogEntry) -> None:
+        guild = getattr(entry, "guild", None)
+        guild_id = getattr(guild, "id", None)
+        entry_id = getattr(entry, "id", None)
+        print(guild, guild_id, entry_id)
+
+        if guild_id is None or entry_id is None:
+            return
+
+        if not hasattr(self, "_recent_audit_entries"):
+            self._recent_audit_entries = {}
+
+        if not hasattr(self, "_recent_audit_entry_ids"):
+            self._recent_audit_entry_ids = set()
+
+        if entry_id in self._recent_audit_entry_ids:
+            return
+
+        self._recent_audit_entry_ids.add(entry_id)
+
+        entries = self._recent_audit_entries.setdefault(guild_id, [])
+        entries.insert(0, entry)
+
+        self._prune_recent_audit_entries(guild_id)
+
+    def _prune_recent_audit_entries(self, guild_id: int) -> None:
+        if not hasattr(self, "_recent_audit_entries"):
+            self._recent_audit_entries = {}
+
+        if not hasattr(self, "_recent_audit_entry_ids"):
+            self._recent_audit_entry_ids = set()
+
+        entries = self._recent_audit_entries.get(guild_id)
+        if not entries:
+            return
+
+        max_age = max(
+            float(getattr(self, "AUDIT_LOG_MAX_AGE", 15)),
+            float(getattr(self, "BULK_AUDIT_LOG_MAX_AGE", 20)),
+            30.0,
+        )
+
+        fresh_entries: list[discord.AuditLogEntry] = []
+
+        for entry in entries[:100]:
+            entry_id = getattr(entry, "id", None)
+            if entry_id is None:
+                continue
+
+            if not self._audit_entry_is_fresh(entry, max_age=max_age):
+                continue
+
+            fresh_entries.append(entry)
+
+        self._recent_audit_entries[guild_id] = fresh_entries
+
+        all_known_ids: set[int] = set()
+        for guild_entries in self._recent_audit_entries.values():
+            for entry in guild_entries:
+                entry_id = getattr(entry, "id", None)
+                if entry_id is not None:
+                    all_known_ids.add(entry_id)
+
+        self._recent_audit_entry_ids = all_known_ids
+
+    def _find_cached_audit_entry_for_target(
+        self,
+        guild: discord.Guild,
+        *,
+        target_id: int,
+        actions: Union[discord.AuditLogAction, Iterable[discord.AuditLogAction]],
+        max_age: Optional[float] = None,
+    ) -> Optional[discord.AuditLogEntry]:
+        if not hasattr(self, "_recent_audit_entries"):
+            self._recent_audit_entries = {}
+
+        entries = self._recent_audit_entries.get(guild.id)
+        if not entries:
+            return None
+
+        actual_max_age = self.AUDIT_LOG_MAX_AGE if max_age is None else max_age
+
+        if isinstance(actions, discord.AuditLogAction):
+            action_set = {actions}
+        else:
+            action_set = set(actions)
+
+        self._prune_recent_audit_entries(guild.id)
+
+        for entry in self._recent_audit_entries.get(guild.id, []):
+            if entry.action not in action_set:
+                continue
+
+            if self._audit_target_id(entry) != target_id:
+                continue
+
+            if not self._audit_entry_is_fresh(entry, max_age=actual_max_age):
+                continue
+
+            return entry
+
+        return None
+
+    def _find_cached_bulk_delete_actor(
+            self,
+            guild: discord.Guild,
+            *,
+            channel_id: int,
+            total_count: int,
+    ) -> tuple[Optional[discord.abc.User], Optional[str]]:
+        if not hasattr(self, "_recent_audit_entries"):
+            self._recent_audit_entries = {}
+
+        entries = self._recent_audit_entries.get(guild.id)
+        if not entries:
+            return None, None
+
+        self._prune_recent_audit_entries(guild.id)
+
+        best_entry: Optional[discord.AuditLogEntry] = None
+        best_score = -1
+
+        for entry in self._recent_audit_entries.get(guild.id, []):
+            if entry.action != discord.AuditLogAction.message_bulk_delete:
+                continue
+
+            if not self._audit_entry_is_fresh(entry, max_age=self.BULK_AUDIT_LOG_MAX_AGE):
+                continue
+
+            extra = getattr(entry, "extra", None)
+            extra_channel = getattr(extra, "channel", None)
+            extra_channel_id = getattr(extra_channel, "id", None)
+            extra_count = getattr(extra, "count", None)
+
+            score = 0
+
+            if extra_channel_id == channel_id:
+                score += 5
+            elif extra_channel_id is None:
+                score += 1
+            else:
+                continue
+
+            if extra_count is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    extra_count_int = int(extra_count)
+
+                    if extra_count_int == total_count:
+                        score += 5
+                    elif abs(extra_count_int - total_count) <= 3:
+                        score += 2
+
+            if score > best_score:
+                best_score = score
+                best_entry = entry
+
+        if best_entry is None:
+            return None, None
+
+        return best_entry.user, best_entry.reason
+
+    async def _find_recent_guild_audit_entry(
+        self,
+        guild: discord.Guild,
+        *,
+        action: discord.AuditLogAction,
+        delay: Optional[float] = None,
+    ) -> Optional[discord.AuditLogEntry]:
+        actual_delay = self.AUDIT_LOG_DELAY if delay is None else delay
+
+        cached_entry = self._find_cached_audit_entry_for_target(
+            guild,
+            target_id=guild.id,
+            actions=action,
+            max_age=self.AUDIT_LOG_MAX_AGE,
+        )
+        if cached_entry is not None:
+            return cached_entry
+
+        try:
+            if actual_delay > 0:
+                await asyncio.sleep(actual_delay)
+
+            cached_entry = self._find_cached_audit_entry_for_target(
+                guild,
+                target_id=guild.id,
+                actions=action,
+                max_age=self.AUDIT_LOG_MAX_AGE,
+            )
+            if cached_entry is not None:
+                return cached_entry
+
+            async for entry in guild.audit_logs(limit=10, action=action):
+                if self._audit_target_id(entry) != guild.id:
+                    continue
+                if not self._audit_entry_is_fresh(entry, max_age=self.AUDIT_LOG_MAX_AGE):
+                    continue
+
+                self._store_recent_audit_entry(entry)
+                return entry
+
+        except (discord.Forbidden, discord.HTTPException):
+            return None
+
+        return None
+
+    async def _find_recent_scheduled_event_audit_entry(
+        self,
+        guild: discord.Guild,
+        *,
+        event_id: int,
+        action: discord.AuditLogAction,
+        delay: Optional[float] = None,
+    ) -> Optional[discord.AuditLogEntry]:
+        actual_delay = self.AUDIT_LOG_DELAY if delay is None else delay
+        return await self._find_recent_audit_entry_for_target(
+            guild,
+            target_id=event_id,
+            actions=action,
+            delay=actual_delay,
+            limit=10,
+            max_age=self.AUDIT_LOG_MAX_AGE,
+        )
+
     async def _find_recent_audit_entry_for_target(
         self,
         guild: discord.Guild,
@@ -461,9 +643,27 @@ class LogsHelper:
         actual_delay = self.AUDIT_LOG_DELAY if delay is None else delay
         actual_max_age = self.AUDIT_LOG_MAX_AGE if max_age is None else max_age
 
+        cached_entry = self._find_cached_audit_entry_for_target(
+            guild,
+            target_id=target_id,
+            actions=actions,
+            max_age=actual_max_age,
+        )
+        if cached_entry is not None:
+            return cached_entry
+
         try:
             if actual_delay > 0:
                 await asyncio.sleep(actual_delay)
+
+            cached_entry = self._find_cached_audit_entry_for_target(
+                guild,
+                target_id=target_id,
+                actions=actions,
+                max_age=actual_max_age,
+            )
+            if cached_entry is not None:
+                return cached_entry
 
             if isinstance(actions, discord.AuditLogAction):
                 async for entry in guild.audit_logs(limit=limit, action=actions):
@@ -471,7 +671,10 @@ class LogsHelper:
                         continue
                     if not self._audit_entry_is_fresh(entry, max_age=actual_max_age):
                         continue
+
+                    self._store_recent_audit_entry(entry)
                     return entry
+
                 return None
 
             action_set = set(actions)
@@ -482,6 +685,8 @@ class LogsHelper:
                     continue
                 if not self._audit_entry_is_fresh(entry, max_age=actual_max_age):
                     continue
+
+                self._store_recent_audit_entry(entry)
                 return entry
 
         except (discord.Forbidden, discord.HTTPException):
@@ -584,44 +789,86 @@ class LogsHelper:
         )
 
     async def _find_bulk_delete_actor(
-        self,
-        guild: discord.Guild,
-        *,
-        channel_id: int,
-        total_count: int,
-        delay: Optional[float] = None,
+            self,
+            guild: discord.Guild,
+            *,
+            channel_id: int,
+            total_count: int,
+            delay: Optional[float] = None,
     ) -> tuple[Optional[discord.abc.User], Optional[str]]:
         actual_delay = self.AUDIT_LOG_DELAY if delay is None else delay
-        fallback: tuple[Optional[discord.abc.User], Optional[str]] = (None, None)
 
-        try:
-            if actual_delay > 0:
-                await asyncio.sleep(actual_delay)
+        if actual_delay > 0:
+            await asyncio.sleep(actual_delay)
 
-            async for entry in guild.audit_logs(
-                limit=10,
-                action=discord.AuditLogAction.message_bulk_delete,
-            ):
-                extra = getattr(entry, "extra", None)
-                extra_channel = getattr(extra, "channel", None)
-                extra_channel_id = getattr(extra_channel, "id", None)
-                extra_count = getattr(extra, "count", None)
+        deadline = time.monotonic() + 8.0
+        best_entry: Optional[discord.AuditLogEntry] = None
+        best_score = -1
 
-                if extra_channel_id != channel_id:
-                    continue
-                if not self._audit_entry_is_fresh(entry, max_age=self.BULK_AUDIT_LOG_MAX_AGE):
-                    continue
+        while True:
+            cached = self._find_cached_bulk_delete_actor(
+                guild,
+                channel_id=channel_id,
+                total_count=total_count,
+            )
+            if cached != (None, None):
+                return cached
 
-                if extra_count is not None and int(extra_count) == total_count:
-                    return entry.user, entry.reason
+            try:
+                async for entry in guild.audit_logs(
+                        limit=15,
+                        action=discord.AuditLogAction.message_bulk_delete,
+                ):
+                    if not self._audit_entry_is_fresh(entry, max_age=self.BULK_AUDIT_LOG_MAX_AGE):
+                        continue
 
-                if fallback == (None, None):
-                    fallback = (entry.user, entry.reason)
+                    self._store_recent_audit_entry(entry)
 
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+                    extra = getattr(entry, "extra", None)
+                    extra_channel = getattr(extra, "channel", None)
+                    extra_channel_id = getattr(extra_channel, "id", None)
+                    extra_count = getattr(extra, "count", None)
 
-        return fallback
+                    score = 0
+
+                    if extra_channel_id == channel_id:
+                        score += 5
+                    elif extra_channel_id is None:
+                        score += 1
+                    else:
+                        continue
+
+                    if extra_count is not None:
+                        with contextlib.suppress(TypeError, ValueError):
+                            extra_count_int = int(extra_count)
+
+                            if extra_count_int == total_count:
+                                score += 5
+                            elif abs(extra_count_int - total_count) <= 3:
+                                score += 2
+
+                    if score > best_score:
+                        best_score = score
+                        best_entry = entry
+
+                    if score >= 10:
+                        return entry.user, entry.reason
+
+            except (discord.Forbidden, discord.HTTPException):
+                return None, None
+
+            if best_entry is not None and best_score >= 5:
+                return best_entry.user, best_entry.reason
+
+            if time.monotonic() >= deadline:
+                break
+
+            await asyncio.sleep(1.0)
+
+        if best_entry is None:
+            return None, None
+
+        return best_entry.user, best_entry.reason
 
     async def _send_view(
         self,
