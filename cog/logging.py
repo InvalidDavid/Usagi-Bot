@@ -95,6 +95,24 @@ class Logs(LogsHelper, commands.Cog):
         self._message_attachment_cache: dict[int, dict[str, Any]] = {}
         self._message_attachment_cache_bytes = 0
 
+    def cache_stats(self) -> dict[str, Any]:
+        recent_audit_entries = sum(
+            len(entries)
+            for entries in getattr(self, "_recent_audit_entries", {}).values()
+        )
+
+        return {
+            "type": "event-state",
+            "recent_bulk_log_keys": len(self._recent_bulk_log_keys),
+            "pending_member_updates": len(self._pending_member_updates),
+            "member_update_tasks": len(self._member_update_tasks),
+            "recent_bans": len(self._recent_bans),
+            "recent_user_update_keys": len(self._recent_user_update_keys),
+            "background_tasks": len(self._background_tasks),
+            "recent_audit_entries": recent_audit_entries,
+            "recent_audit_entry_ids": len(getattr(self, "_recent_audit_entry_ids", set())),
+        }
+
     def cog_unload(self) -> None:
         for task in self._background_tasks:
             task.cancel()

@@ -570,21 +570,6 @@ class User(commands.Cog):
         minutes, seconds = divmod(remainder, 60)
         return f"🗓️ {days}d ⏰ {hours}h ⏳ {minutes}m ⏲️ {seconds}s"
 
-    def visible_command_count(self, *, include_owner: bool = False) -> int:
-        total = 0
-
-        for cmd in iter_main_commands(self.bot):
-            total += len(gather_commands_recursive(cmd, include_owner=include_owner))
-
-        for cog_name, cog in self.bot.cogs.items():
-            if cog_name in OWNER_COGS and not include_owner:
-                continue
-
-            for cmd in getattr(cog, "get_commands", lambda: [])():
-                total += len(gather_commands_recursive(cmd, include_owner=include_owner))
-
-        return total
-
     async def fetch_user_profile(self, user_id: int) -> Optional[discord.User]:
         try:
             return await self.bot.fetch_user(user_id)
@@ -856,21 +841,6 @@ class User(commands.Cog):
             value=f"```{len(getattr(self.bot, 'guilds', []))}```",
             inline=True,
         )
-        embed.add_field(
-            name="👥 Cached Users",
-            value=f"```{len(getattr(self.bot, 'users', []))}```",
-            inline=True,
-        )
-        embed.add_field(
-            name="🧩 Cogs",
-            value=f"```{len(getattr(self.bot, 'cogs', {}))}```",
-            inline=True,
-        )
-        embed.add_field(
-            name="📚 Commands",
-            value=f"```{self.visible_command_count(include_owner=is_bot_owner(ctx.author.id))}```",
-            inline=True,
-        )
 
         if is_bot_owner(ctx.author.id):
             process = psutil.Process(os.getpid())
@@ -941,21 +911,6 @@ class User(commands.Cog):
                 ),
                 inline=False,
             )
-
-            if cache_stats:
-                embed.add_field(
-                    name="🗃️ Global Cache",
-                    value=(
-                        "```"
-                        f"Entries: {cache_stats['entries']} / {cache_stats['max_entries']}\n"
-                        f"TTL entries: {cache_stats['ttl_entries']}\n"
-                        f"Persistent: {cache_stats['persistent_entries']}\n"
-                        f"Default TTL: {cache_stats['default_ttl']}\n"
-                        f"Cleanup: {cache_stats['cleanup_interval']}s"
-                        "```"
-                    ),
-                    inline=False,
-                )
 
         embed.set_footer(
             text=f"Requested by {ctx.author}",

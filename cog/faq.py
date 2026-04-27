@@ -1,6 +1,5 @@
 
 # small faq system which uses the new v2 components of discord buttons, dropdown menu
-# if u dont rly understand how this all works maybe use this website as it shows ur it better: https://discord.builders/pycord-python-code-generator
 
 from utils.imports import *
 
@@ -136,7 +135,7 @@ class FaqCategorySelect(discord.ui.DesignerView):
             lines.append(f"**{faq['number']}. {faq['question']}**\n{faq['answer']}")
 
         message = "\n\n".join(lines) if lines else "No FAQ found."
-        # py-cord bug which resets the dropdown without rly editing sth, dont change it unless it got fixxed
+        # py-cord bug which resets the dropdown
         await interaction.response.edit_message()
         await interaction.followup.send(message, ephemeral=True)
 

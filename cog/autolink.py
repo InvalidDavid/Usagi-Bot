@@ -8,6 +8,7 @@ URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$", re.ASCII)
 REDDIT_ID_RE = re.compile(r"^[a-z0-9]+$", re.ASCII)
+REDDIT_COMMENTS_ID_RE = re.compile(r"(?:/r/[A-Za-z0-9_]+)?/comments/([a-z0-9]+)", re.IGNORECASE)
 INSTAGRAM_SHORTCODE_RE = re.compile(r"^[A-Za-z0-9_-]+$", re.ASCII)
 
 PlatformParser: TypeAlias = Callable[
@@ -43,6 +44,35 @@ class Autolink(commands.Cog):
         self.guild_locks: dict[int, asyncio.Lock] = {}
         self._http_session: aiohttp.ClientSession | None = None
 
+    def cache_stats(self) -> dict[str, Any]:
+        now = time.monotonic()
+
+        guild_count = len(self.processed_links_by_guild)
+        entry_count = sum(len(cache) for cache in self.processed_links_by_guild.values())
+
+        expired_count = 0
+        biggest_guild_id = None
+        biggest_guild_entries = 0
+
+        for guild_id, cache in self.processed_links_by_guild.items():
+            expired_count += sum(1 for expires_at in cache.values() if expires_at <= now)
+
+            if len(cache) > biggest_guild_entries:
+                biggest_guild_id = guild_id
+                biggest_guild_entries = len(cache)
+
+        return {
+            "type": "internal",
+            "guilds": guild_count,
+            "entries": entry_count,
+            "expired_pending_cleanup": expired_count,
+            "locks": len(self.guild_locks),
+            "ttl_seconds": self.CACHE_TTL_SECONDS,
+            "max_per_guild": self.CACHE_SIZE_PER_GUILD,
+            "biggest_guild": biggest_guild_id or "None",
+            "biggest_guild_entries": biggest_guild_entries,
+        }
+
     async def cog_load(self) -> None:
         if not self.cleanup_cache.is_running():
             self.cleanup_cache.start()
@@ -57,10 +87,9 @@ class Autolink(commands.Cog):
         if self._http_session is None or self._http_session.closed:
             timeout = aiohttp.ClientTimeout(total=self.REDDIT_RESOLVE_TIMEOUT_SECONDS)
             headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 "
-                    "(compatible; Usagi-Bot/1.0; +https://github.com/InvalidDavid/Usagi-Bot)"
-                )
+                "User-Agent": "linux:usagi-bot:v1.0.0 (by /u/YOUR_REDDIT_USERNAME)",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
             }
             self._http_session = aiohttp.ClientSession(timeout=timeout, headers=headers)
 
@@ -75,6 +104,27 @@ class Autolink(commands.Cog):
     @cleanup_cache.before_loop
     async def before_cleanup_cache(self) -> None:
         await self.bot.wait_until_ready()
+
+    @staticmethod
+    def _extract_reddit_post_id_from_text(text: str) -> str | None:
+        if not text:
+            return None
+
+        normalized = (
+            text
+            .replace("\\/", "/")
+            .replace("&amp;", "&")
+        )
+
+        match = REDDIT_COMMENTS_ID_RE.search(normalized)
+        if not match:
+            return None
+
+        post_id = match.group(1).lower().strip()
+        if not REDDIT_ID_RE.fullmatch(post_id):
+            return None
+
+        return post_id
 
     def _get_guild_lock(self, guild_id: int) -> asyncio.Lock:
         lock = self.guild_locks.get(guild_id)
@@ -465,27 +515,68 @@ class Autolink(commands.Cog):
 
             async with session.get(link.original_url, allow_redirects=True) as response:
                 final_url = str(response.url)
+                status = response.status
+
+                if status == 403:
+                    logger.warning(
+                        "Reddit blocked share resolver with 403 | original=%s | fallback=%s",
+                        link.original_url,
+                        link.mirror_url,
+                    )
+                    return link
+
+                body = ""
+                content_type = response.headers.get("Content-Type", "")
+
+                if "text/html" in content_type.lower() or "application/json" in content_type.lower():
+                    body = await response.text(errors="ignore")
 
             parsed = urlparse(final_url)
             resolved = self._build_link_match(final_url, parsed)
 
-            if resolved is None:
-                return link
+            if resolved is not None and resolved.dedup_key.startswith("reddit:"):
 
-            if resolved.dedup_key.startswith("reddit:"):
                 return LinkMatch(
                     original_url=link.original_url,
                     mirror_url=resolved.mirror_url,
                     dedup_key=resolved.dedup_key,
                 )
 
+            post_id = self._extract_reddit_post_id_from_text(final_url)
+            if post_id is None:
+                post_id = self._extract_reddit_post_id_from_text(body)
+
+            if post_id is not None:
+                mirror_url = f"https://{self.MIRROR_DOMAINS['reddit']}/comments/{post_id}"
+
+                return LinkMatch(
+                    original_url=link.original_url,
+                    mirror_url=mirror_url,
+                    dedup_key=f"reddit:{post_id}",
+                )
+
+            logger.warning(
+                "Reddit share did not resolve to post | original=%s | final=%s | dedup_after=%s",
+                link.original_url,
+                final_url,
+                resolved.dedup_key if resolved is not None else "None",
+            )
             return link
 
-        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError):
-            logger.debug("Failed to resolve Reddit share URL: %s", link.original_url, exc_info=True)
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as exc:
+            logger.warning(
+                "Failed to resolve Reddit share URL | original=%s | error=%s: %s",
+                link.original_url,
+                type(exc).__name__,
+                exc,
+            )
             return link
 
     async def _resolve_reddit_share_links(self, links: Iterable[LinkMatch]) -> list[LinkMatch]:
+        links = list(links)
+
+        reddit_share_count = sum(1 for link in links if self._is_reddit_share_match(link))
+
         resolved_links: list[LinkMatch] = []
 
         for link in links:

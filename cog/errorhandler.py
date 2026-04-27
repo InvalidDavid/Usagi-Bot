@@ -286,6 +286,19 @@ class ErrorHandler(commands.Cog):
         self._slash_cache_cleanup_task: Optional[asyncio.Task] = None
         self._background_started = False
 
+    def cache_stats(self) -> dict[str, Any]:
+        webhook_entries = 0
+
+        if self.webhook_logger is not None:
+            webhook_entries = len(getattr(self.webhook_logger, "_error_cache", {}))
+
+        return {
+            "type": "dedup",
+            "webhook_error_cache": webhook_entries,
+            "slash_error_cache": len(self._slash_error_cache),
+            "webhook_enabled": self.webhook_logger is not None,
+        }
+
     def cog_unload(self) -> None:
         self._background_started = False
 
