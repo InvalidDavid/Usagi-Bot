@@ -442,6 +442,9 @@ def build_bot() -> tuple[UsagiBot, Callable[[], Awaitable[None]]]:
     @commands.is_owner()
     async def sync(ctx: commands.Context) -> None:
         await bot.sync_commands(force=True)
+        user_cog = bot.get_cog("User")
+        if user_cog is not None and hasattr(user_cog, "invalidate_help_cache"):
+            user_cog.invalidate_help_cache()
         logger.info("%s: Synced from %s (%s)", datetime.now(), ctx.author, ctx.author.id)
         await ctx.reply("Slash commands are now synced. Wait a few seconds before using them.")
 
@@ -455,17 +458,77 @@ def build_bot() -> tuple[UsagiBot, Callable[[], Awaitable[None]]]:
     @bot.command(name="cachestats", hidden=True)
     @commands.is_owner()
     async def cachestats(ctx: commands.Context) -> None:
-        stats = await bot.cache_stats()
-        await ctx.reply(
-            "\n".join([
-                f"entries={stats['entries']}",
-                f"ttl_entries={stats['ttl_entries']}",
-                f"persistent_entries={stats['persistent_entries']}",
-                f"max_entries={stats['max_entries']}",
-                f"default_ttl={stats['default_ttl']}",
-                f"cleanup_interval={stats['cleanup_interval']}",
-            ])
-        )
+        sections: list[str] = []
+
+        try:
+            stats = await bot.cache_stats()
+            sections.append(
+                "\n".join(
+                    [
+                        "[GlobalCache]",
+                        f"entries={stats['entries']}",
+                        f"ttl_entries={stats['ttl_entries']}",
+                        f"persistent_entries={stats['persistent_entries']}",
+                        f"max_entries={stats['max_entries']}",
+                        f"default_ttl={stats['default_ttl']}",
+                        f"cleanup_interval={stats['cleanup_interval']}",
+                        f"expired_removed={stats['expired_removed']}",
+                    ]
+                )
+            )
+        except Exception as exc:
+            logger.exception("Failed to read global cache stats")
+            sections.append(f"[GlobalCache]\nerror={type(exc).__name__}: {exc}")
+
+        for cog_name, cog in sorted(bot.cogs.items(), key=lambda item: item[0].lower()):
+            stats_func = getattr(cog, "cache_stats", None)
+            if not callable(stats_func):
+                continue
+
+            try:
+                cog_stats = stats_func()
+
+                if hasattr(cog_stats, "__await__"):
+                    cog_stats = await cog_stats
+
+                if not isinstance(cog_stats, dict):
+                    sections.append(f"[{cog_name}]\nerror=cache_stats did not return dict")
+                    continue
+
+                lines = [f"[{cog_name}]"]
+                for key, value in cog_stats.items():
+                    lines.append(f"{key}={value}")
+
+                sections.append("\n".join(lines))
+
+            except Exception as exc:
+                logger.exception("Failed to read cache stats for cog %s", cog_name)
+                sections.append(f"[{cog_name}]\nerror={type(exc).__name__}: {exc}")
+
+        if not sections:
+            await ctx.reply("No cache stats found.")
+            return
+
+        output = "\n\n".join(sections)
+
+        chunks: list[str] = []
+        current = ""
+
+        for block in output.split("\n\n"):
+            candidate = f"{current}\n\n{block}".strip() if current else block
+
+            if len(candidate) > 1850:
+                if current:
+                    chunks.append(current)
+                current = block
+            else:
+                current = candidate
+
+        if current:
+            chunks.append(current)
+
+        for chunk in chunks:
+            await ctx.reply(f"```ini\n{chunk}\n```")
 
     async def shutdown_bot() -> None:
         logger.info("Shutdown started.")
