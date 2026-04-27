@@ -82,6 +82,9 @@ class Logs(LogsHelper, commands.Cog):
         self._recent_user_update_keys: set[tuple[int, str, str, str, str]] = set()
         self._background_tasks: set[asyncio.Task] = set()
 
+        self._recent_audit_entries: dict[int, list[discord.AuditLogEntry]] = {}
+        self._recent_audit_entry_ids: set[int] = set()
+
     def cog_unload(self) -> None:
         for task in self._background_tasks:
             task.cancel()
@@ -95,6 +98,8 @@ class Logs(LogsHelper, commands.Cog):
         self._recent_bulk_log_keys.clear()
         self._recent_bans.clear()
         self._recent_user_update_keys.clear()
+        self._recent_audit_entries.clear()
+        self._recent_audit_entry_ids.clear()
 
     def _create_task(
         self,
@@ -116,6 +121,14 @@ class Logs(LogsHelper, commands.Cog):
         exc = task.exception()
         if exc is not None:
             logger.exception("Unhandled task error in Logs cog.", exc_info=exc)
+
+    @commands.Cog.listener()
+    async def on_audit_log_entry(self, entry: discord.AuditLogEntry) -> None:
+        guild = getattr(entry, "guild", None)
+        if guild is None or not self._is_target_guild(guild.id):
+            return
+
+        self._store_recent_audit_entry(entry)
 
     async def _sleep_and_discard_ban(self, user_id: int, delay: float = RECENT_BAN_TTL) -> None:
         await asyncio.sleep(delay)
