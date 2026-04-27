@@ -273,66 +273,6 @@ class LogsHelper:
         }
 
     @staticmethod
-    def _scheduled_event_location_text(event: Any) -> str:
-        location = getattr(event, "location", None)
-        if location:
-            return str(location)
-
-        channel = getattr(event, "channel", None)
-        if channel is not None:
-            mention = getattr(channel, "mention", None)
-            return mention or getattr(channel, "name", str(channel))
-
-        return "None"
-
-    async def _scheduled_event_creator_text(
-        self,
-        event: Any,
-        *,
-        delay: float = 1.5,
-    ) -> str:
-        creator = getattr(event, "creator", None)
-        if creator is not None:
-            mention = getattr(creator, "mention", str(creator))
-            return f"{creator} | {mention}"
-
-        guild = getattr(event, "guild", None)
-        event_id = getattr(event, "id", None)
-
-        if guild is None or event_id is None:
-            return "Unknown"
-
-        if delay > 0:
-            await asyncio.sleep(delay)
-
-        try:
-            fetched = await guild.fetch_scheduled_event(event_id)
-        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-            fetched = None
-
-        if fetched is not None:
-            creator = getattr(fetched, "creator", None)
-            if creator is not None:
-                mention = getattr(creator, "mention", str(creator))
-                return f"{creator} | {mention}"
-
-            creator_id = getattr(fetched, "creator_id", None)
-            if creator_id is not None:
-                member = guild.get_member(creator_id)
-                if member is not None:
-                    return f"{member} | {member.mention}"
-                return f"Unknown | `{creator_id}`"
-
-        creator_id = getattr(event, "creator_id", None)
-        if creator_id is not None:
-            member = guild.get_member(creator_id)
-            if member is not None:
-                return f"{member} | {member.mention}"
-            return f"Unknown | `{creator_id}`"
-
-        return "Unknown"
-
-    @staticmethod
     def _guild_channel_ref(channel: Any) -> str:
         if channel is None:
             return "None"
@@ -410,7 +350,6 @@ class LogsHelper:
         guild = getattr(entry, "guild", None)
         guild_id = getattr(guild, "id", None)
         entry_id = getattr(entry, "id", None)
-        print(guild, guild_id, entry_id)
 
         if guild_id is None or entry_id is None:
             return
@@ -567,6 +506,62 @@ class LogsHelper:
 
         return best_entry.user, best_entry.reason
 
+    async def _find_recent_message_delete_actor(
+            self,
+            msg: discord.Message,
+            *,
+            delay: Optional[float] = None,
+    ) -> tuple[Optional[discord.abc.User], Optional[str]]:
+        guild = msg.guild
+        if guild is None:
+            return None, None
+
+        author_id = getattr(msg.author, "id", None)
+        channel_id = getattr(msg.channel, "id", None)
+
+        if author_id is None or channel_id is None:
+            return None, None
+
+        actual_delay = self.AUDIT_LOG_DELAY if delay is None else delay
+
+        if actual_delay > 0:
+            await asyncio.sleep(actual_delay)
+
+        try:
+            async for entry in guild.audit_logs(
+                    limit=10,
+                    action=discord.AuditLogAction.message_delete,
+            ):
+                if not self._audit_entry_is_fresh(entry, max_age=self.AUDIT_LOG_MAX_AGE):
+                    continue
+
+                if self._audit_target_id(entry) != author_id:
+                    continue
+
+                extra = getattr(entry, "extra", None)
+                extra_channel = getattr(extra, "channel", None)
+                extra_channel_id = getattr(extra_channel, "id", None)
+
+                if extra_channel_id is not None and extra_channel_id != channel_id:
+                    continue
+
+                actor = getattr(entry, "user", None)
+                if actor is None:
+                    continue
+
+                if getattr(actor, "id", None) == author_id:
+                    return None, None
+
+                if hasattr(self, "_store_recent_audit_entry"):
+                    self._store_recent_audit_entry(entry)
+
+                return actor, getattr(entry, "reason", None)
+
+        except (discord.Forbidden, discord.HTTPException):
+            return None, None
+
+        return None, None
+
     async def _find_recent_guild_audit_entry(
         self,
         guild: discord.Guild,
@@ -611,24 +606,6 @@ class LogsHelper:
             return None
 
         return None
-
-    async def _find_recent_scheduled_event_audit_entry(
-        self,
-        guild: discord.Guild,
-        *,
-        event_id: int,
-        action: discord.AuditLogAction,
-        delay: Optional[float] = None,
-    ) -> Optional[discord.AuditLogEntry]:
-        actual_delay = self.AUDIT_LOG_DELAY if delay is None else delay
-        return await self._find_recent_audit_entry_for_target(
-            guild,
-            target_id=event_id,
-            actions=action,
-            delay=actual_delay,
-            limit=10,
-            max_age=self.AUDIT_LOG_MAX_AGE,
-        )
 
     async def _find_recent_audit_entry_for_target(
         self,
@@ -871,10 +848,11 @@ class LogsHelper:
         return best_entry.user, best_entry.reason
 
     async def _send_view(
-        self,
-        *,
-        view: DesignerView,
-        file: Optional[discord.File] = None,
+            self,
+            *,
+            view: DesignerView,
+            file: Optional[discord.File] = None,
+            files: Optional[list[discord.File]] = None,
     ) -> None:
         channel = await self._get_log_channel()
         if channel is None:
@@ -886,8 +864,18 @@ class LogsHelper:
             "allowed_mentions": self.allowed_mentions,
         }
 
+        all_files: list[discord.File] = []
+
         if file is not None:
-            send_kwargs["file"] = file
+            all_files.append(file)
+
+        if files:
+            all_files.extend(files)
+
+        if len(all_files) == 1:
+            send_kwargs["file"] = all_files[0]
+        elif len(all_files) > 1:
+            send_kwargs["files"] = all_files
 
         try:
             await channel.send(**send_kwargs)
