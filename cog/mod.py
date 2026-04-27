@@ -1,7 +1,10 @@
 from utils.imports import *
 
+logger = logging.getLogger("bot.mod")
+
 TAG_CHANGE_LIMIT = 2
 TAG_CHANGE_WINDOW_SECONDS = 300
+TAG_CLEANUP_INTERVAL_SECONDS = 60.0
 
 
 async def tag_thread(ctx: discord.AutocompleteContext):
@@ -27,9 +30,54 @@ class ModC(commands.Cog):
         self.bot = bot
         self._thread_tag_changes: dict[int, list[float]] = defaultdict(list)
         self._thread_tag_change_lock = asyncio.Lock()
+        self._tag_cleanup_task: Optional[asyncio.Task] = None
 
     mod = SlashCommandGroup("mod", "Mod commands")
     forum = SlashCommandGroup("forum", "Forum management commands")
+
+    async def cog_load(self) -> None:
+        if self._tag_cleanup_task is None or self._tag_cleanup_task.done():
+            self._tag_cleanup_task = asyncio.create_task(
+                self._tag_cleanup_loop(),
+                name="mod:thread_tag_cleanup",
+            )
+
+    def cog_unload(self) -> None:
+        if self._tag_cleanup_task is not None:
+            self._tag_cleanup_task.cancel()
+            self._tag_cleanup_task = None
+
+        self._thread_tag_changes.clear()
+
+    async def _tag_cleanup_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(TAG_CLEANUP_INTERVAL_SECONDS)
+
+                async with self._thread_tag_change_lock:
+                    self._prune_tag_changes_locked(time.monotonic())
+
+        except asyncio.CancelledError:
+            return
+
+        except Exception:
+            logger.exception("Thread tag cleanup loop crashed.")
+
+    def _prune_tag_changes_locked(self, now: float) -> None:
+        window_start = now - TAG_CHANGE_WINDOW_SECONDS
+
+        stale_thread_ids: list[int] = []
+
+        for thread_id, entries in self._thread_tag_changes.items():
+            fresh_entries = [ts for ts in entries if ts > window_start]
+
+            if fresh_entries:
+                self._thread_tag_changes[thread_id] = fresh_entries
+            else:
+                stale_thread_ids.append(thread_id)
+
+        for thread_id in stale_thread_ids:
+            self._thread_tag_changes.pop(thread_id, None)
 
     def _command_mention(self, command_name: str) -> str:
         for command in self.bot.application_commands:
@@ -58,13 +106,9 @@ class ModC(commands.Cog):
     async def _reserve_tag_change_slot(self, thread_id: int) -> tuple[bool, float]:
         async with self._thread_tag_change_lock:
             now = time.monotonic()
-            window_start = now - TAG_CHANGE_WINDOW_SECONDS
+            self._prune_tag_changes_locked(now)
 
-            entries = [
-                ts for ts in self._thread_tag_changes.get(thread_id, [])
-                if ts > window_start
-            ]
-            self._thread_tag_changes[thread_id] = entries
+            entries = self._thread_tag_changes.get(thread_id, [])
 
             if len(entries) >= TAG_CHANGE_LIMIT:
                 retry_after = max(0.0, entries[0] + TAG_CHANGE_WINDOW_SECONDS - now)
@@ -91,88 +135,89 @@ class ModC(commands.Cog):
     # If you want in a specific thread channel to have a automatic message that pins and sends a embed then u can remove the # with "strg + /" or "ctrl + /" dont forget to mark it.
     # and change in THREADID the correct channel id, else u can complelty remove it
 
-    # @commands.Cog.listener()
-    # async def on_thread_create(self, thread: discord.Thread):
-    #     if not isinstance(thread.parent, discord.ForumChannel):
-    #         return
-    # 
-    #     if thread.parent.id != 1488486275898933288:
-    #         return
-    # 
-    #     pin_notice = None
-    # 
-    #     me = thread.guild.me
-    #     if me is None and self.bot.user is not None:
-    #         me = thread.guild.get_member(self.bot.user.id)
-    # 
-    #     if me is None:
-    #         pin_notice = "Couldn't pin starter message, could not resolve bot member."
-    #     else:
-    #         permissions = thread.permissions_for(me)
-    # 
-    #         can_pin = (
-    #                 getattr(permissions, "pin_messages", False)
-    #                 or getattr(permissions, "manage_messages", False)
-    #         )
-    # 
-    #         if not can_pin:
-    #             pin_notice = "Couldn't pin starter message, missing pin/manage messages permission."
-    #         else:
-    #             starter_msg = None
-    # 
-    #             for attempt in range(5):
-    #                 try:
-    #                     starter_msg = await thread.fetch_message(thread.id)
-    #                     break
-    #                 except discord.NotFound:
-    #                     await asyncio.sleep(1 + attempt)
-    #                 except discord.Forbidden:
-    #                     pin_notice = "Couldn't pin starter message, missing permissions."
-    #                     break
-    #                 except discord.HTTPException:
-    #                     await asyncio.sleep(1 + attempt)
-    # 
-    #             if starter_msg is None and pin_notice is None:
-    #                 pin_notice = "Couldn't find the starter message to pin."
-    # 
-    #             if starter_msg is not None:
-    #                 try:
-    #                     await starter_msg.pin(
-    #                         reason=f"Auto-pin support starter message in thread {thread.id}"
-    #                     )
-    #                 except discord.Forbidden:
-    #                     pin_notice = "Couldn't pin starter message, missing permissions."
-    #                 except discord.NotFound:
-    #                     pin_notice = "Couldn't find the starter message to pin."
-    #                 except discord.HTTPException as e:
-    #                     pin_notice = f"Couldn't pin starter message due to a Discord API error: {e}"
-    # 
-    #     embed = discord.Embed(
-    #         title="Support Channel",
-    #         description=(
-    #             "Rules for asking for support:\n"
-    #             "1. - <#1484655685542350990>"
-    #             "2. - <#1488492402623905913>."
-    #         ),
-    #         color=discord.Color.blurple()
-    #     )
-    #     embed.set_footer(text="You can use /close to close your post.")
-    # 
-    #     content = f"<@{thread.owner_id}>"
-    #     if pin_notice:
-    #         content += f"\n-# {pin_notice}"
-    # 
-    #     for attempt in range(5):
-    #         try:
-    #             await thread.send(content=content, embed=embed)
-    #             return
-    #         except discord.Forbidden as e:
-    #             if "40058" in str(e):
-    #                 await asyncio.sleep(1 + attempt)
-    #                 continue
-    #             raise
-    #         except discord.HTTPException:
-    #             await asyncio.sleep(1 + attempt)
+    @commands.Cog.listener()
+    async def on_thread_create(self, thread: discord.Thread):
+        if not isinstance(thread.parent, discord.ForumChannel):
+            return
+
+        THREADID = 1488486275898933288
+        if thread.parent.id != THREADID:
+            return
+
+        pin_notice = None
+
+        me = thread.guild.me
+        if me is None and self.bot.user is not None:
+            me = thread.guild.get_member(self.bot.user.id)
+
+        if me is None:
+            pin_notice = "Couldn't pin starter message, could not resolve bot member."
+        else:
+            permissions = thread.permissions_for(me)
+
+            can_pin = (
+                getattr(permissions, "pin_messages", False)
+                or getattr(permissions, "manage_messages", False)
+            )
+
+            if not can_pin:
+                pin_notice = "Couldn't pin starter message, missing pin/manage messages permission."
+            else:
+                starter_msg = None
+
+                for attempt in range(5):
+                    try:
+                        starter_msg = await thread.fetch_message(thread.id)
+                        break
+                    except discord.NotFound:
+                        await asyncio.sleep(1 + attempt)
+                    except discord.Forbidden:
+                        pin_notice = "Couldn't pin starter message, missing permissions."
+                        break
+                    except discord.HTTPException:
+                        await asyncio.sleep(1 + attempt)
+
+                if starter_msg is None and pin_notice is None:
+                    pin_notice = "Couldn't find the starter message to pin."
+
+                if starter_msg is not None:
+                    try:
+                        await starter_msg.pin(
+                            reason=f"Auto-pin support starter message in thread {thread.id}"
+                        )
+                    except discord.Forbidden:
+                        pin_notice = "Couldn't pin starter message, missing permissions."
+                    except discord.NotFound:
+                        pin_notice = "Couldn't find the starter message to pin."
+                    except discord.HTTPException as e:
+                        pin_notice = f"Couldn't pin starter message due to a Discord API error: {e}"
+
+        embed = discord.Embed(
+            title="Support Channel",
+            description=(
+                "Rules for asking for support:\n"
+                "1. - <#1484655685542350990>"
+                "2. - <#1488492402623905913>."
+            ),
+            color=discord.Color.blurple()
+        )
+        embed.set_footer(text="You can use /close to close your post.")
+
+        content = f"<@{thread.owner_id}>"
+        if pin_notice:
+            content += f"\n-# {pin_notice}"
+
+        for attempt in range(5):
+            try:
+                await thread.send(content=content, embed=embed)
+                return
+            except discord.Forbidden as e:
+                if "40058" in str(e):
+                    await asyncio.sleep(1 + attempt)
+                    continue
+                raise
+            except discord.HTTPException:
+                await asyncio.sleep(1 + attempt)
 
     @mod.command(name="purge", description="Clear messages")
     @commands.guild_only()
