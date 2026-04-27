@@ -17,9 +17,15 @@ class AniList(commands.Cog):
         self.bot = bot
         self._session: Optional[aiohttp.ClientSession] = None
 
-    def cog_unload(self) -> None:
+    async def cog_load(self) -> None:
+        await self._get_session()
+
+    async def cog_unload(self) -> None:
+        await self._close_session()
+
+    async def _close_session(self) -> None:
         if self._session is not None and not self._session.closed:
-            asyncio.create_task(self._session.close())
+            await self._session.close()
 
         self._session = None
 
@@ -84,7 +90,11 @@ class AniList(commands.Cog):
                 body = await response.json(content_type=None)
 
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
-            logger.exception("AniList request crashed | media_type=%s | search=%s", media_type, name)
+            logger.exception(
+                "AniList request crashed | media_type=%s | search=%s",
+                media_type,
+                name,
+            )
             return None
 
         if not isinstance(body, dict):
@@ -126,9 +136,7 @@ class AniList(commands.Cog):
             cover_image = {}
 
         media_id = media.get("id")
-        cover_url = cover_image.get("large")
-        if not cover_url and media_id:
-            cover_url = f"https://img.anili.st/media/{media_id}"
+        cover_url = f"https://img.anili.st/media/{media_id}"
 
         genres = media.get("genres")
         if not isinstance(genres, list):
@@ -203,7 +211,11 @@ class AniList(commands.Cog):
         date_text = self.format_start_date(media.get("start_date"))
 
         desc = self.clean_description(media.get("desc", ""))
-        desc = self.truncate_description(desc, media.get("url"), self.MAX_DESCRIPTION_WORDS)
+        desc = self.truncate_description(
+            desc,
+            media.get("url"),
+            self.MAX_DESCRIPTION_WORDS,
+        )
 
         genres = ", ".join(media.get("genres", [])) if media.get("genres") else "Unknown"
         color = self.parse_embed_color(media.get("color"))
