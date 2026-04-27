@@ -22,10 +22,12 @@ class LinkMatch:
     mirror_url: str
     dedup_key: str
 
+
 class Autolink(commands.Cog):
     CACHE_TTL_SECONDS = 300.0
     CACHE_SIZE_PER_GUILD = 500
     MAX_FACEBOOK_ID_LENGTH = 20
+    REDDIT_RESOLVE_TIMEOUT_SECONDS = 6.0
 
     MIRROR_DOMAINS = {
         "instagram": "kkinstagram.com",
@@ -39,6 +41,7 @@ class Autolink(commands.Cog):
         self.bot = bot
         self.processed_links_by_guild: dict[int, dict[str, float]] = defaultdict(dict)
         self.guild_locks: dict[int, asyncio.Lock] = {}
+        self._http_session: aiohttp.ClientSession | None = None
 
     async def cog_load(self) -> None:
         if not self.cleanup_cache.is_running():
@@ -47,6 +50,21 @@ class Autolink(commands.Cog):
     def cog_unload(self) -> None:
         self.cleanup_cache.cancel()
 
+        if self._http_session is not None and not self._http_session.closed:
+            asyncio.create_task(self._http_session.close())
+
+    async def _get_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is None or self._http_session.closed:
+            timeout = aiohttp.ClientTimeout(total=self.REDDIT_RESOLVE_TIMEOUT_SECONDS)
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 "
+                    "(compatible; Usagi-Bot/1.0; +https://github.com/InvalidDavid/Usagi-Bot)"
+                )
+            }
+            self._http_session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+
+        return self._http_session
 
     @tasks.loop(minutes=2)
     async def cleanup_cache(self) -> None:
@@ -140,12 +158,14 @@ class Autolink(commands.Cog):
         host = host.lower().strip(".")
         prefixes = ("www.", "m.", "old.", "mobile.")
         changed = True
+
         while changed:
             changed = False
             for prefix in prefixes:
                 if host.startswith(prefix):
                     host = host[len(prefix):]
                     changed = True
+
         return host
 
     def _format_footer(self, original_url: str, message_url: str) -> str:
@@ -245,7 +265,6 @@ class Autolink(commands.Cog):
         kind = path_parts[0].lower()
         shortcode = path_parts[1].strip()
 
-        # Support common direct Instagram content routes.
         if kind == "reels":
             kind = "reel"
 
@@ -332,7 +351,6 @@ class Autolink(commands.Cog):
         if video_id is None:
             return None
 
-        # this is for the mirror website ?shorts, YouTube itself doenst have it.
         shorts_list = query.get("shorts", [])
         is_shorts = bool(shorts_list) and shorts_list[0].lower() not in {"0", "false", "no"}
         return video_id, is_shorts, False
@@ -379,7 +397,6 @@ class Autolink(commands.Cog):
                 dedup_key=f"reddit:{post_id}",
             )
 
-        # Shared short Reddit URL: /s/<id>
         if len(path_parts) >= 2 and path_parts[0].lower() == "s":
             share_id = path_parts[1].strip()
             if not share_id:
@@ -391,10 +408,6 @@ class Autolink(commands.Cog):
                 dedup_key=f"reddit-share:{share_id.lower()}",
             )
 
-        # Shared subreddit/user short URL:
-        # /r/<subreddit>/s/<id>
-        # /u/<user>/s/<id>
-        # /user/<user>/s/<id>
         if (
             len(path_parts) >= 4
             and path_parts[0].lower() in {"r", "u", "user"}
@@ -410,7 +423,6 @@ class Autolink(commands.Cog):
                 dedup_key=f"reddit-share:{share_id.lower()}",
             )
 
-        # Gallery posts still map back to the post id.
         if len(path_parts) >= 2 and path_parts[0].lower() == "gallery":
             post_id = path_parts[1].lower().strip()
             if not REDDIT_ID_RE.fullmatch(post_id):
@@ -440,6 +452,50 @@ class Autolink(commands.Cog):
             mirror_url=f"https://{self.MIRROR_DOMAINS['reddit']}/comments/{post_id}",
             dedup_key=f"reddit:{post_id}",
         )
+
+    def _is_reddit_share_match(self, link: LinkMatch) -> bool:
+        return link.dedup_key.startswith("reddit-share:")
+
+    async def _resolve_reddit_share_link(self, link: LinkMatch) -> LinkMatch:
+        if not self._is_reddit_share_match(link):
+            return link
+
+        try:
+            session = await self._get_http_session()
+
+            async with session.get(link.original_url, allow_redirects=True) as response:
+                final_url = str(response.url)
+
+            parsed = urlparse(final_url)
+            resolved = self._build_link_match(final_url, parsed)
+
+            if resolved is None:
+                return link
+
+            if resolved.dedup_key.startswith("reddit:"):
+                return LinkMatch(
+                    original_url=link.original_url,
+                    mirror_url=resolved.mirror_url,
+                    dedup_key=resolved.dedup_key,
+                )
+
+            return link
+
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError):
+            logger.debug("Failed to resolve Reddit share URL: %s", link.original_url, exc_info=True)
+            return link
+
+    async def _resolve_reddit_share_links(self, links: Iterable[LinkMatch]) -> list[LinkMatch]:
+        resolved_links: list[LinkMatch] = []
+
+        for link in links:
+            resolved_links.append(await self._resolve_reddit_share_link(link))
+
+        deduped: dict[str, LinkMatch] = {}
+        for link in resolved_links:
+            deduped.setdefault(link.dedup_key, link)
+
+        return list(deduped.values())
 
     def _parse_facebook(
         self,
@@ -480,7 +536,6 @@ class Autolink(commands.Cog):
             if match is not None:
                 return match
 
-        # /<user>/videos/<id>
         if len(path_parts) >= 3 and path_parts[-2].lower() == "videos":
             video_id = path_parts[-1].strip()
             if self._valid_facebook_id(video_id):
@@ -536,7 +591,6 @@ class Autolink(commands.Cog):
         )
 
     def _facebook_share_match(self, original_url: str, path_parts: list[str]) -> LinkMatch | None:
-        # /share/r/<id>
         if len(path_parts) >= 3 and path_parts[1].lower() == "r":
             reel_id = path_parts[2].strip()
             if self._valid_facebook_id(reel_id):
@@ -546,7 +600,6 @@ class Autolink(commands.Cog):
                     dedup_key=f"facebook-reel:{reel_id.lower()}",
                 )
 
-        # /share/v/<id>
         if len(path_parts) >= 3 and path_parts[1].lower() == "v":
             video_id = path_parts[2].strip()
             if self._valid_facebook_id(video_id):
@@ -556,7 +609,6 @@ class Autolink(commands.Cog):
                     dedup_key=f"facebook-watch:{video_id.lower()}",
                 )
 
-        # /share/<id>
         if len(path_parts) >= 2 and path_parts[1].lower() not in {"r", "v"}:
             share_id = path_parts[1].strip()
             if self._valid_facebook_id(share_id):
@@ -660,14 +712,12 @@ class Autolink(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        # Ignore bots and webhooks.
         if message.author.bot or message.webhook_id is not None:
             return
 
         if message.guild is None:
             return
 
-        # Ignore non-user text messages.
         if not message.content or message.type != discord.MessageType.default:
             return
 
@@ -683,11 +733,14 @@ class Autolink(commands.Cog):
         if not links:
             return
 
+        links = await self._resolve_reddit_share_links(links)
+        if not links:
+            return
+
         guild_id = message.guild.id
         lock = self._get_guild_lock(guild_id)
         now = time.monotonic()
 
-        # Keep cache mutation inside the guild lock to avoid duplicate processing.
         async with lock:
             self._prune_guild_cache(guild_id, now)
 
@@ -704,14 +757,11 @@ class Autolink(commands.Cog):
                 )
                 return
 
-            # Mark links before sending to reduce duplicate replies under concurrency.
             for link in fresh_links:
                 self._mark_processed(guild_id, link.dedup_key, now)
 
         sent = await self._send_mirrors(message, fresh_links)
         if not sent:
-            # Rollback is intentionally skipped. A short-lived false dedupe is preferable
-            # to duplicate mirror replies caused by concurrent sends.
             return
 
         await self._suppress_embeds_if_possible(message, perms.manage_messages)
@@ -719,196 +769,3 @@ class Autolink(commands.Cog):
 
 def setup(bot: commands.Bot) -> None:
     bot.add_cog(Autolink(bot))
-
-
-# pytest tests in same file
-# run with: pytest -q cog/autolink.py
-# you need to install pytest + pytest-asyncio
-# this code is to test each function of the cache if its works properly or got any issues
-
-# try:
-#     import pytest
-#     from types import SimpleNamespace
-#     from unittest.mock import AsyncMock, Mock, patch
-# except ImportError:
-#     pytest = None
-#
-#
-# if pytest is not None:
-#     @pytest.fixture
-#     def cog():
-#         fake_bot = SimpleNamespace(
-#             user=SimpleNamespace(id=12345),
-#             wait_until_ready=AsyncMock(),
-#         )
-#
-#         instance = Autolink(fake_bot)
-#         return instance
-#
-#
-#     def test_mark_and_is_processed_until_expiry(cog):
-#         guild_id = 1
-#         key = "youtube:abc123"
-#         now = 100.0
-#
-#         assert cog._is_processed(guild_id, key, now) is False
-#
-#         cog._mark_processed(guild_id, key, now)
-#
-#         assert cog._is_processed(guild_id, key, now + 1.0) is True
-#         assert cog._is_processed(guild_id, key, now + 299.999) is True
-#         assert cog._is_processed(guild_id, key, now + cog.CACHE_TTL_SECONDS) is False
-#         assert guild_id not in cog.processed_links_by_guild
-#
-#
-#     def test_prune_guild_cache_removes_expired_entries_and_lock(cog):
-#         guild_id = 42
-#         now = 500.0
-#
-#         cog._get_guild_lock(guild_id)
-#
-#         cog.processed_links_by_guild[guild_id] = {
-#             "a": now - 1,
-#             "b": now - 10,
-#         }
-#
-#         cog._prune_guild_cache(guild_id, now)
-#
-#         assert guild_id not in cog.processed_links_by_guild
-#         assert guild_id not in cog.guild_locks
-#
-#
-#     def test_prune_guild_cache_keeps_size_limit_and_removes_oldest(cog):
-#         guild_id = 99
-#         old_limit = cog.CACHE_SIZE_PER_GUILD
-#         cog.CACHE_SIZE_PER_GUILD = 3
-#
-#         try:
-#             cog.processed_links_by_guild[guild_id] = {
-#                 "k1": 10.0,
-#                 "k2": 20.0,
-#                 "k3": 30.0,
-#                 "k4": 40.0,
-#                 "k5": 50.0,
-#             }
-#
-#             cog._prune_guild_cache(guild_id, now=0.0)
-#
-#             remaining = cog.processed_links_by_guild[guild_id]
-#             assert set(remaining.keys()) == {"k3", "k4", "k5"}
-#         finally:
-#             cog.CACHE_SIZE_PER_GUILD = old_limit
-#
-#
-#     def test_is_processed_removes_expired_entry_but_keeps_other_entries(cog):
-#         guild_id = 7
-#         now = 1000.0
-#
-#         cog.processed_links_by_guild[guild_id] = {
-#             "expired": now - 1,
-#             "alive": now + 100,
-#         }
-#
-#         assert cog._is_processed(guild_id, "expired", now) is False
-#         assert cog._is_processed(guild_id, "alive", now) is True
-#         assert "alive" in cog.processed_links_by_guild[guild_id]
-#
-#
-#     def make_message(
-#         *,
-#         guild_id=1,
-#         content="https://youtu.be/dQw4w9WgXcQ",
-#         manage_messages=False,
-#     ):
-#         perms = SimpleNamespace(send_messages=True, manage_messages=manage_messages)
-#         me = object()
-#
-#         guild = SimpleNamespace(
-#             id=guild_id,
-#             get_member=lambda _user_id: me,
-#             me=me,
-#         )
-#
-#         channel = SimpleNamespace(
-#             id=555,
-#             permissions_for=lambda _member: perms,
-#         )
-#
-#         author = SimpleNamespace(bot=False)
-#
-#         return SimpleNamespace(
-#             id=999,
-#             author=author,
-#             webhook_id=None,
-#             guild=guild,
-#             channel=channel,
-#             content=content,
-#             type=discord.MessageType.default,
-#             jump_url="https://discord.com/channels/1/555/999",
-#         )
-#
-#
-#     @pytest.mark.asyncio
-#     async def test_cog_load_starts_cleanup_loop(cog):
-#         with patch.object(cog.cleanup_cache, "start", return_value=None) as start_mock:
-#             await cog.cog_load()
-#             start_mock.assert_called_once()
-#
-#
-#     @pytest.mark.asyncio
-#     async def test_on_message_failed_send_still_marks_processed(cog):
-#         msg = make_message()
-#
-#         link = LinkMatch(
-#             original_url="https://youtu.be/dQw4w9WgXcQ",
-#             mirror_url="https://koutu.be/watch?v=dQw4w9WgXcQ",
-#             dedup_key="youtube:dqw4w9wgxcq",
-#         )
-#
-#         cog._extract_supported_links = Mock(return_value=[link])
-#         cog._send_mirrors = AsyncMock(return_value=False)
-#         cog._suppress_embeds_if_possible = AsyncMock()
-#
-#         await cog.on_message(msg)
-#         await cog.on_message(msg)
-#
-#         cog._send_mirrors.assert_awaited_once()
-#         cog._suppress_embeds_if_possible.assert_not_awaited()
-#
-#
-#     @pytest.mark.asyncio
-#     async def test_on_message_concurrent_calls_only_send_once(cog):
-#         msg1 = make_message(guild_id=123)
-#         msg2 = make_message(guild_id=123)
-#
-#         link = LinkMatch(
-#             original_url="https://youtu.be/dQw4w9WgXcQ",
-#             mirror_url="https://koutu.be/watch?v=dQw4w9WgXcQ",
-#             dedup_key="youtube:dqw4w9wgxcq",
-#         )
-#
-#         cog._extract_supported_links = Mock(return_value=[link])
-#         cog._send_mirrors = AsyncMock(return_value=True)
-#         cog._suppress_embeds_if_possible = AsyncMock()
-#
-#         await asyncio.gather(cog.on_message(msg1), cog.on_message(msg2))
-#
-#         cog._send_mirrors.assert_awaited_once()
-#
-#
-#     @pytest.mark.asyncio
-#     async def test_on_message_ignores_bots_and_dms(cog):
-#         bot_msg = make_message()
-#         bot_msg.author.bot = True
-#
-#         dm_msg = make_message()
-#         dm_msg.guild = None
-#
-#         cog._extract_supported_links = Mock()
-#         cog._send_mirrors = AsyncMock()
-#
-#         await cog.on_message(bot_msg)
-#         await cog.on_message(dm_msg)
-#
-#         cog._extract_supported_links.assert_not_called()
-#         cog._send_mirrors.assert_not_awaited()
