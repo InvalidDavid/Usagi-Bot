@@ -16,6 +16,13 @@ from utils.secrets import (
 
 logger = logging.getLogger("bot.logging")
 
+# dont change that, may break
+NORMAL_DELETE_ATTACHMENT_CACHE_TTL = 10 * 60
+NORMAL_DELETE_ATTACHMENT_CACHE_MAX_MESSAGES = 25
+NORMAL_DELETE_ATTACHMENT_CACHE_MAX_BYTES = 128 * 1024 * 1024
+NORMAL_DELETE_ATTACHMENT_MAX_FILE_BYTES = 8 * 1024 * 1024
+NORMAL_DELETE_ATTACHMENT_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+NORMAL_DELETE_ATTACHMENT_MAX_FILES = 3
 
 class Logs(LogsHelper, commands.Cog):
     LOG_GUILD_ID = LOG_GUILD_ID
@@ -85,6 +92,9 @@ class Logs(LogsHelper, commands.Cog):
         self._recent_audit_entries: dict[int, list[discord.AuditLogEntry]] = {}
         self._recent_audit_entry_ids: set[int] = set()
 
+        self._message_attachment_cache: dict[int, dict[str, Any]] = {}
+        self._message_attachment_cache_bytes = 0
+
     def cog_unload(self) -> None:
         for task in self._background_tasks:
             task.cancel()
@@ -100,6 +110,8 @@ class Logs(LogsHelper, commands.Cog):
         self._recent_user_update_keys.clear()
         self._recent_audit_entries.clear()
         self._recent_audit_entry_ids.clear()
+        self._message_attachment_cache.clear()
+        self._message_attachment_cache_bytes = 0
 
     def _create_task(
         self,
@@ -121,6 +133,172 @@ class Logs(LogsHelper, commands.Cog):
         exc = task.exception()
         if exc is not None:
             logger.exception("Unhandled task error in Logs cog.", exc_info=exc)
+
+    @staticmethod
+    def _safe_attachment_filename(message_id: int, index: int, filename: Optional[str]) -> str:
+        raw = str(filename or f"attachment_{index}").strip() or f"attachment_{index}"
+        raw = raw.replace("/", "_").replace("\\", "_")
+        raw = raw.replace(":", "_").replace("*", "_").replace("?", "_")
+        raw = raw.replace('"', "_").replace("<", "_").replace(">", "_").replace("|", "_")
+
+        if len(raw) > 80:
+            raw = raw[:80]
+
+        return f"{message_id}_{index}_{raw}"
+
+    def _drop_cached_message_attachments(self, message_id: int) -> Optional[dict[str, Any]]:
+        entry = self._message_attachment_cache.pop(message_id, None)
+        if entry is not None:
+            self._message_attachment_cache_bytes = max(
+                0,
+                self._message_attachment_cache_bytes - int(entry.get("size", 0)),
+            )
+        return entry
+
+    def _prune_message_attachment_cache(self) -> None:
+        now = time.monotonic()
+
+        expired_ids = [
+            message_id
+            for message_id, entry in self._message_attachment_cache.items()
+            if now - float(entry.get("created_at", now)) > NORMAL_DELETE_ATTACHMENT_CACHE_TTL
+        ]
+
+        for message_id in expired_ids:
+            self._drop_cached_message_attachments(message_id)
+
+        while (
+                len(self._message_attachment_cache) > NORMAL_DELETE_ATTACHMENT_CACHE_MAX_MESSAGES
+                or self._message_attachment_cache_bytes > NORMAL_DELETE_ATTACHMENT_CACHE_MAX_BYTES
+        ):
+            oldest_id = min(
+                self._message_attachment_cache,
+                key=lambda mid: float(self._message_attachment_cache[mid].get("created_at", now)),
+            )
+            self._drop_cached_message_attachments(oldest_id)
+
+    async def _cache_message_attachments(self, message: discord.Message) -> None:
+        if message.guild is None or not self._is_target_guild(message.guild.id):
+            return
+
+        if message.author.bot:
+            return
+
+        if not message.attachments:
+            return
+
+        self._prune_message_attachment_cache()
+
+        files: list[dict[str, Any]] = []
+        total_size = 0
+
+        for index, attachment in enumerate(message.attachments[:NORMAL_DELETE_ATTACHMENT_MAX_FILES], start=1):
+            attachment_size = int(getattr(attachment, "size", 0) or 0)
+
+            if attachment_size <= 0:
+                continue
+
+            if attachment_size > NORMAL_DELETE_ATTACHMENT_MAX_FILE_BYTES:
+                continue
+
+            if total_size + attachment_size > NORMAL_DELETE_ATTACHMENT_MAX_TOTAL_BYTES:
+                continue
+
+            try:
+                data = await attachment.read(use_cached=True)
+            except discord.HTTPException:
+                continue
+
+            if not data:
+                continue
+
+            total_size += len(data)
+
+            files.append(
+                {
+                    "filename": self._safe_attachment_filename(
+                        message.id,
+                        index,
+                        getattr(attachment, "filename", None),
+                    ),
+                    "content_type": getattr(attachment, "content_type", None),
+                    "data": data,
+                }
+            )
+
+        if not files:
+            return
+
+        self._drop_cached_message_attachments(message.id)
+
+        self._message_attachment_cache[message.id] = {
+            "created_at": time.monotonic(),
+            "size": total_size,
+            "files": files,
+        }
+        self._message_attachment_cache_bytes += total_size
+
+        self._prune_message_attachment_cache()
+
+    def _consume_cached_message_attachment_files(self, message_id: int) -> list[discord.File]:
+        entry = self._drop_cached_message_attachments(message_id)
+        if not entry:
+            return []
+
+        files: list[discord.File] = []
+
+        for item in entry.get("files", []):
+            data = item.get("data")
+            filename = item.get("filename")
+
+            if not data or not filename:
+                continue
+
+            files.append(
+                discord.File(
+                    BytesIO(data),
+                    filename=filename,
+                )
+            )
+
+        return files
+
+    @staticmethod
+    def _reason_line(reason: Optional[str], *, limit: int = 300) -> Optional[str]:
+        if not reason:
+            return None
+
+        reason = str(reason).strip()
+        if not reason:
+            return None
+
+        if len(reason) > limit:
+            reason = reason[: limit - 3] + "..."
+
+        return f"-# Reason: {reason}"
+
+    def _moderator_footer_text(
+        self,
+        *,
+        actor: Optional[discord.abc.User],
+        reason: Optional[str],
+        unknown: bool = True,
+    ) -> Optional[str]:
+        lines: list[str] = []
+
+        if actor is not None:
+            lines.append(f"-# **Moderator:** {actor} • {actor.id}")
+        elif unknown:
+            lines.append("-# **Moderator:** Unknown")
+
+        reason_line = self._reason_line(reason)
+        if reason_line:
+            lines.append(reason_line)
+
+        if not lines:
+            return None
+
+        return self._truncate("\n".join(lines), limit=350)
 
     @commands.Cog.listener()
     async def on_audit_log_entry(self, entry: discord.AuditLogEntry) -> None:
@@ -152,6 +330,101 @@ class Logs(LogsHelper, commands.Cog):
         await asyncio.sleep(delay)
         self._recent_bulk_log_keys.discard(self._bulk_log_key(guild_id, channel_id, message_ids))
 
+    async def _find_recent_message_delete_actor(
+        self,
+        msg: discord.Message,
+    ) -> tuple[Optional[discord.abc.User], Optional[str]]:
+        if msg.guild is None:
+            return None, None
+
+        await asyncio.sleep(self.AUDIT_LOG_DELAY)
+
+        try:
+            async for entry in msg.guild.audit_logs(
+                limit=10,
+                action=discord.AuditLogAction.message_delete,
+            ):
+                if not self._audit_entry_is_fresh(entry, max_age=self.AUDIT_LOG_MAX_AGE):
+                    continue
+
+                extra = getattr(entry, "extra", None)
+                extra_channel = getattr(extra, "channel", None)
+                extra_channel_id = getattr(extra_channel, "id", None)
+                target_id = self._audit_target_id(entry)
+
+                if extra_channel_id is not None and extra_channel_id != msg.channel.id:
+                    continue
+
+                if target_id is not None and target_id != msg.author.id:
+                    continue
+
+                self._store_recent_audit_entry(entry)
+                return entry.user, entry.reason
+
+        except discord.Forbidden:
+            logger.warning("Missing View Audit Log permission while resolving single message delete actor.")
+            return None, None
+
+        except discord.HTTPException as exc:
+            logger.warning("Failed to fetch audit logs for single message delete actor: %s", exc)
+            return None, None
+
+        return None, None
+
+    async def _find_recent_webhook_audit_entry(
+        self,
+        channel: discord.abc.GuildChannel,
+    ) -> Optional[discord.AuditLogEntry]:
+        guild = getattr(channel, "guild", None)
+        if guild is None:
+            return None
+
+        actions = {
+            getattr(discord.AuditLogAction, "webhook_create", None),
+            getattr(discord.AuditLogAction, "webhook_update", None),
+            getattr(discord.AuditLogAction, "webhook_delete", None),
+        }
+        actions.discard(None)
+
+        if not actions:
+            return None
+
+        await asyncio.sleep(self.AUDIT_LOG_DELAY)
+
+        try:
+            async for entry in guild.audit_logs(limit=10):
+                if entry.action not in actions:
+                    continue
+
+                if not self._audit_entry_is_fresh(entry, max_age=self.AUDIT_LOG_MAX_AGE):
+                    continue
+
+                target = getattr(entry, "target", None)
+                target_channel_id = getattr(target, "channel_id", None)
+
+                extra = getattr(entry, "extra", None)
+                extra_channel = getattr(extra, "channel", None)
+                extra_channel_id = getattr(extra_channel, "id", None)
+
+                if target_channel_id is not None and target_channel_id != channel.id:
+                    continue
+
+                if extra_channel_id is not None and extra_channel_id != channel.id:
+                    continue
+
+                self._store_recent_audit_entry(entry)
+                return entry
+
+        except discord.Forbidden:
+            logger.warning("Missing View Audit Log permission while resolving webhook actor.")
+            return None
+
+        except discord.HTTPException as exc:
+            logger.warning("Failed to fetch audit logs for webhook actor: %s", exc)
+            return None
+
+        return None
+
     async def _flush_member_update(self, key: tuple[int, int]) -> None:
         try:
             await asyncio.sleep(self.MEMBER_UPDATE_DELAY)
@@ -174,6 +447,8 @@ class Logs(LogsHelper, commands.Cog):
 
         changes: list[str] = []
         nick_changed = before.nick != after.nick
+        roles_changed = set(self._role_map(before)) != set(self._role_map(after))
+        timeout_changed = self._member_timeout_until(before) != self._member_timeout_until(after)
 
         if nick_changed:
             changes.append(f"Nickname {self.ARROW} `{before.nick or 'None'}` → `{after.nick or 'None'}`")
@@ -183,7 +458,7 @@ class Logs(LogsHelper, commands.Cog):
         before_timeout = self._member_timeout_until(before)
         after_timeout = self._member_timeout_until(after)
 
-        if before_timeout != after_timeout:
+        if timeout_changed:
             changes.append(
                 f"Timeout {self.ARROW} {self._fmt_dt(before_timeout, 'R')} → {self._fmt_dt(after_timeout, 'R')}"
             )
@@ -191,20 +466,31 @@ class Logs(LogsHelper, commands.Cog):
         if not changes:
             return
 
-        moderator_text = None
-        reason_text = None
+        actor = None
+        reason = None
 
-        if nick_changed:
+        if nick_changed or timeout_changed:
             entry = await self._find_recent_member_audit_entry(
                 after.guild,
                 member_id=after.id,
                 action=discord.AuditLogAction.member_update,
             )
-            if entry is not None and entry.user is not None:
+            if entry is not None:
                 actor = entry.user
-                moderator_text = f"-# **Moderator:** {actor} • {actor.id}"
-                if entry.reason:
-                    reason_text = f"-# Reason: {entry.reason}"
+                reason = entry.reason
+
+        if actor is None and roles_changed:
+            role_action = getattr(discord.AuditLogAction, "member_role_update", None)
+            if role_action is not None:
+                entry = await self._find_recent_member_audit_entry(
+                    after.guild,
+                    member_id=after.id,
+                    action=role_action,
+                    delay=0,
+                )
+                if entry is not None:
+                    actor = entry.user
+                    reason = entry.reason
 
         header_text = self._truncate(
             "\n".join(
@@ -228,21 +514,15 @@ class Logs(LogsHelper, commands.Cog):
             TextDisplay(changes_text),
         ]
 
-        if moderator_text or reason_text:
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=False)
+        if footer_text:
             items.append(
                 discord.ui.Separator(
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 )
             )
-
-            footer_lines: list[str] = []
-            if moderator_text:
-                footer_lines.append(moderator_text)
-            if reason_text:
-                footer_lines.append(reason_text)
-
-            items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=300)))
+            items.append(TextDisplay(footer_text))
 
         view = DesignerView(
             Container(
@@ -304,9 +584,11 @@ class Logs(LogsHelper, commands.Cog):
         channel_label = self._channel_name(channel_obj) if channel_obj else f"`{channel_id}`"
 
         moderator = None
+        reason = None
+
         guild = self.bot.get_guild(guild_id) if guild_id else None
         if guild is not None:
-            moderator, _reason = await self._find_bulk_delete_actor(
+            moderator, reason = await self._find_bulk_delete_actor(
                 guild,
                 channel_id=channel_id,
                 total_count=total_count,
@@ -333,10 +615,9 @@ class Logs(LogsHelper, commands.Cog):
             discord.ui.File(f"attachment://{file_to_send.filename}"),
         ]
 
-        if moderator is not None:
-            items.append(TextDisplay(f"-# **Moderator:** {moderator} • {moderator.id}"))
-        else:
-            items.append(TextDisplay("-# **Moderator:** Unknown"))
+        footer_text = self._moderator_footer_text(actor=moderator, reason=reason, unknown=True)
+        if footer_text:
+            items.append(TextDisplay(footer_text))
 
         view = DesignerView(
             Container(
@@ -419,14 +700,8 @@ class Logs(LogsHelper, commands.Cog):
         kicked = kick_entry is not None
         title = "## Member Kicked" if kicked else "## Member Left"
 
-        actor_text = None
-        reason_text = None
-
-        if kicked and kick_entry.user is not None:
-            actor = kick_entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if kick_entry.reason:
-                reason_text = f"-# Reason: {kick_entry.reason}"
+        actor = kick_entry.user if kicked and kick_entry is not None else None
+        reason = kick_entry.reason if kicked and kick_entry is not None else None
 
         header_text = self._truncate(
             "\n".join(
@@ -457,21 +732,15 @@ class Logs(LogsHelper, commands.Cog):
             TextDisplay(details_text),
         ]
 
-        if actor_text or reason_text:
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=False)
+        if footer_text:
             items.append(
                 discord.ui.Separator(
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 )
             )
-
-            footer_lines: list[str] = []
-            if actor_text:
-                footer_lines.append(actor_text)
-            if reason_text:
-                footer_lines.append(reason_text)
-
-            items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=300)))
+            items.append(TextDisplay(footer_text))
 
         view = DesignerView(
             Container(
@@ -498,19 +767,17 @@ class Logs(LogsHelper, commands.Cog):
 
         joined_at = getattr(user, "joined_at", None)
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_member_audit_entry(
             guild,
             member_id=user.id,
             action=discord.AuditLogAction.ban,
         )
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         header_text = self._truncate(
             "\n".join(
@@ -532,9 +799,7 @@ class Logs(LogsHelper, commands.Cog):
             limit=800,
         )
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
 
         view = DesignerView(
             Container(
@@ -548,7 +813,7 @@ class Logs(LogsHelper, commands.Cog):
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 ),
-                TextDisplay(self._truncate("\n".join(footer_lines), limit=300)),
+                TextDisplay(footer_text or "-# **Moderator:** Unknown"),
                 color=self._color("member_ban"),
             )
         )
@@ -559,19 +824,17 @@ class Logs(LogsHelper, commands.Cog):
         if not self._is_target_guild(guild.id):
             return
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_member_audit_entry(
             guild,
             member_id=user.id,
             action=discord.AuditLogAction.unban,
         )
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         header_text = self._truncate(
             "\n".join(
@@ -588,9 +851,7 @@ class Logs(LogsHelper, commands.Cog):
             limit=800,
         )
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
 
         view = DesignerView(
             Container(
@@ -604,7 +865,7 @@ class Logs(LogsHelper, commands.Cog):
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 ),
-                TextDisplay(self._truncate("\n".join(footer_lines), limit=300)),
+                TextDisplay(footer_text or "-# **Moderator:** Unknown"),
                 color=self._color("member_unban"),
             )
         )
@@ -756,19 +1017,17 @@ class Logs(LogsHelper, commands.Cog):
         if not self._is_target_guild(channel.guild.id):
             return
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_channel_audit_entry(
             channel.guild,
             channel_id=channel.id,
             action=discord.AuditLogAction.channel_create,
         )
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         details = self._truncate(
             "\n".join(
@@ -780,10 +1039,6 @@ class Logs(LogsHelper, commands.Cog):
             ),
             limit=1500,
         )
-
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
 
         items: list[Any] = [
             TextDisplay("## Channel Created"),
@@ -798,7 +1053,9 @@ class Logs(LogsHelper, commands.Cog):
         if jump_row:
             items.append(jump_row)
 
-        items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=300)))
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
+        if footer_text:
+            items.append(TextDisplay(footer_text))
 
         view = DesignerView(
             Container(
@@ -813,19 +1070,17 @@ class Logs(LogsHelper, commands.Cog):
         if not self._is_target_guild(channel.guild.id):
             return
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_channel_audit_entry(
             channel.guild,
             channel_id=channel.id,
             action=discord.AuditLogAction.channel_delete,
         )
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         details = self._truncate(
             "\n".join(
@@ -838,9 +1093,7 @@ class Logs(LogsHelper, commands.Cog):
             limit=1500,
         )
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
 
         view = DesignerView(
             Container(
@@ -850,7 +1103,7 @@ class Logs(LogsHelper, commands.Cog):
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 ),
-                TextDisplay(self._truncate("\n".join(footer_lines), limit=300)),
+                TextDisplay(footer_text or "-# **Moderator:** Unknown"),
                 color=self._color("channel_delete"),
             )
         )
@@ -934,19 +1187,16 @@ class Logs(LogsHelper, commands.Cog):
         if not changes:
             return
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_channel_or_overwrite_audit_entry(
             after.guild,
             channel_id=after.id,
         )
         if entry is not None:
-            actor = getattr(entry, "user", None)
-            if actor is not None:
-                actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            actor = entry.user
+            reason = entry.reason
 
         header_text = self._truncate(
             "\n".join(
@@ -960,10 +1210,6 @@ class Logs(LogsHelper, commands.Cog):
         )
 
         changes_text = self._truncate("\n".join(changes), limit=1300)
-
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
 
         items: list[Any] = [
             TextDisplay("## Channel Updated"),
@@ -979,7 +1225,9 @@ class Logs(LogsHelper, commands.Cog):
         if jump_row:
             items.append(jump_row)
 
-        items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=300)))
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
+        if footer_text:
+            items.append(TextDisplay(footer_text))
 
         view = DesignerView(
             Container(
@@ -993,6 +1241,20 @@ class Logs(LogsHelper, commands.Cog):
     async def on_thread_create(self, thread: discord.Thread) -> None:
         if not self._is_target_guild(thread.guild.id):
             return
+
+        actor = None
+        reason = None
+        thread_create_action = getattr(discord.AuditLogAction, "thread_create", None)
+
+        if thread_create_action is not None:
+            entry = await self._find_recent_thread_audit_entry(
+                thread.guild,
+                thread_id=thread.id,
+                action=thread_create_action,
+            )
+            if entry is not None:
+                actor = entry.user
+                reason = entry.reason
 
         items: list[Any] = [
             TextDisplay("## Thread Created"),
@@ -1011,6 +1273,10 @@ class Logs(LogsHelper, commands.Cog):
         if jump_row:
             items.append(jump_row)
 
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=False)
+        if footer_text:
+            items.append(TextDisplay(footer_text))
+
         view = DesignerView(
             Container(
                 *self._flatten_items(items),
@@ -1024,28 +1290,24 @@ class Logs(LogsHelper, commands.Cog):
         if not self._is_target_guild(thread.guild.id):
             return
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_thread_audit_entry(
             thread.guild,
             thread_id=thread.id,
             action=discord.AuditLogAction.thread_delete,
         )
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         body_lines = [
             f"Name {self.ARROW} `{thread.name}`",
             f"ID {self.ARROW} `{thread.id}`",
         ]
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
 
         view = DesignerView(
             Container(
@@ -1055,7 +1317,7 @@ class Logs(LogsHelper, commands.Cog):
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 ),
-                TextDisplay(self._truncate("\n".join(footer_lines), limit=300)),
+                TextDisplay(footer_text or "-# **Moderator:** Unknown"),
                 color=self._color("thread_delete"),
             )
         )
@@ -1077,6 +1339,20 @@ class Logs(LogsHelper, commands.Cog):
         if not changes:
             return
 
+        actor = None
+        reason = None
+        thread_update_action = getattr(discord.AuditLogAction, "thread_update", None)
+
+        if thread_update_action is not None:
+            entry = await self._find_recent_thread_audit_entry(
+                after.guild,
+                thread_id=after.id,
+                action=thread_update_action,
+            )
+            if entry is not None:
+                actor = entry.user
+                reason = entry.reason
+
         items: list[Any] = [
             TextDisplay("## Thread Updated"),
             TextDisplay(
@@ -1094,6 +1370,10 @@ class Logs(LogsHelper, commands.Cog):
         if jump_row:
             items.append(jump_row)
 
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=False)
+        if footer_text:
+            items.append(TextDisplay(footer_text))
+
         view = DesignerView(
             Container(
                 *self._flatten_items(items),
@@ -1107,19 +1387,17 @@ class Logs(LogsHelper, commands.Cog):
         if not self._is_target_guild(role.guild.id):
             return
 
-        actor_text = "-# **Moderator:**  Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_role_audit_entry(
             role.guild,
             role_id=role.id,
             action=discord.AuditLogAction.role_delete,
         )
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         details = self._truncate(
             "\n".join(
@@ -1132,9 +1410,7 @@ class Logs(LogsHelper, commands.Cog):
             limit=1500,
         )
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
 
         view = DesignerView(
             Container(
@@ -1144,7 +1420,7 @@ class Logs(LogsHelper, commands.Cog):
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 ),
-                TextDisplay(self._truncate("\n".join(footer_lines), limit=300)),
+                TextDisplay(footer_text or "-# **Moderator:** Unknown"),
                 color=self._color("role_delete"),
             )
         )
@@ -1155,19 +1431,17 @@ class Logs(LogsHelper, commands.Cog):
         if not self._is_target_guild(role.guild.id):
             return
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_role_audit_entry(
             role.guild,
             role_id=role.id,
             action=discord.AuditLogAction.role_create,
         )
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         details = self._truncate(
             "\n".join(
@@ -1180,9 +1454,7 @@ class Logs(LogsHelper, commands.Cog):
             limit=1500,
         )
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
 
         view = DesignerView(
             Container(
@@ -1192,7 +1464,7 @@ class Logs(LogsHelper, commands.Cog):
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 ),
-                TextDisplay(self._truncate("\n".join(footer_lines), limit=300)),
+                TextDisplay(footer_text or "-# **Moderator:** Unknown"),
                 color=self._color("role_create"),
             )
         )
@@ -1226,8 +1498,8 @@ class Logs(LogsHelper, commands.Cog):
         if not changes:
             return
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_role_audit_entry(
             after.guild,
@@ -1235,11 +1507,9 @@ class Logs(LogsHelper, commands.Cog):
             action=discord.AuditLogAction.role_update,
         )
 
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         header_text = self._truncate(
             "\n".join(
@@ -1252,12 +1522,7 @@ class Logs(LogsHelper, commands.Cog):
         )
 
         changes_text = self._truncate("\n".join(changes), limit=1400)
-
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
-
-        footer_text = self._truncate("\n".join(footer_lines), limit=300)
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
 
         view = DesignerView(
             Container(
@@ -1268,7 +1533,7 @@ class Logs(LogsHelper, commands.Cog):
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 ),
-                TextDisplay(footer_text),
+                TextDisplay(footer_text or "-# **Moderator:** Unknown"),
                 color=self._color("role_update"),
             )
         )
@@ -1372,6 +1637,8 @@ class Logs(LogsHelper, commands.Cog):
             return
 
         deleted_at = discord.utils.utcnow()
+        moderator, delete_reason = await self._find_recent_message_delete_actor(msg)
+        cached_files = self._consume_cached_message_attachment_files(msg.id)
 
         items: list[Any] = [
             Section(
@@ -1413,23 +1680,42 @@ class Logs(LogsHelper, commands.Cog):
                 )
             )
 
-        attachment_gallery = self._attachment_gallery(msg.attachments)
-        if attachment_gallery:
-            items.append(TextDisplay(self._block_text("Attachments", f"`{len(msg.attachments)}` file(s)")))
-            items.append(attachment_gallery)
+        if cached_files:
+            items.append(TextDisplay(self._block_text("Cached Attachments", f"`{len(cached_files)}` file(s)")))
+
+            for cached_file in cached_files:
+                items.append(discord.ui.File(f"attachment://{cached_file.filename}"))
+
             items.append(
                 discord.ui.Separator(
                     divider=True,
                     spacing=discord.SeparatorSpacingSize.small,
                 )
             )
+        else:
+            attachment_gallery = self._attachment_gallery(msg.attachments)
+            if attachment_gallery:
+                items.append(TextDisplay(self._block_text("Attachments", f"`{len(msg.attachments)}` file(s)")))
+                items.append(attachment_gallery)
+                items.append(
+                    discord.ui.Separator(
+                        divider=True,
+                        spacing=discord.SeparatorSpacingSize.small,
+                    )
+                )
 
-        items.append(
-            TextDisplay(
-                f"-# Message ID: {msg.id} • Flags: {self._message_flags(msg)}\n"
-                f"-# Deleted: {self._fmt_dt(deleted_at, 'f')}"
-            )
-        )
+        footer_lines = [
+            f"-# Message ID: {msg.id} • Flags: {self._message_flags(msg)}",
+            f"-# Deleted: {self._fmt_dt(deleted_at, 'f')}",
+        ]
+
+        if moderator is not None:
+            footer_lines.append(f"-# **Moderator:** {moderator} • {moderator.id}")
+
+            if delete_reason:
+                footer_lines.append(f"-# Reason: {delete_reason}")
+
+        items.append(TextDisplay("\n".join(footer_lines)))
 
         view = DesignerView(
             Container(
@@ -1437,7 +1723,12 @@ class Logs(LogsHelper, commands.Cog):
                 color=self._color("message_delete"),
             )
         )
-        await self._send_view(view=view)
+
+
+        await self._send_view(
+            view=view,
+            files=cached_files if cached_files else None,
+        )
 
     @commands.Cog.listener()
     async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent) -> None:
@@ -1546,14 +1837,8 @@ class Logs(LogsHelper, commands.Cog):
                 actions=discord.AuditLogAction.emoji_update,
             )
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
-
-        if entry is not None and entry.user is not None:
-            actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+        actor = entry.user if entry is not None else None
+        reason = entry.reason if entry is not None else None
 
         items.append(
             discord.ui.Separator(
@@ -1562,11 +1847,8 @@ class Logs(LogsHelper, commands.Cog):
             )
         )
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
-
-        items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=300)))
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
+        items.append(TextDisplay(footer_text or "-# **Moderator:** Unknown"))
 
         view = DesignerView(
             Container(
@@ -1716,18 +1998,16 @@ class Logs(LogsHelper, commands.Cog):
         if not changes:
             return
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
+        actor = None
+        reason = None
 
         entry = await self._find_recent_guild_audit_entry(
             after,
             action=discord.AuditLogAction.guild_update,
         )
-        if entry is not None and entry.user is not None:
+        if entry is not None:
             actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+            reason = entry.reason
 
         items: list[Any] = [
             TextDisplay("## Server Updated"),
@@ -1738,214 +2018,13 @@ class Logs(LogsHelper, commands.Cog):
             ),
         ]
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
-
-        items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=300)))
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
+        items.append(TextDisplay(footer_text or "-# **Moderator:** Unknown"))
 
         view = DesignerView(
             Container(
                 *self._flatten_items(items),
                 color=self._color("guild_update"),
-            )
-        )
-        await self._send_view(view=view)
-
-    @commands.Cog.listener()
-    async def on_scheduled_event_create(self, event: discord.ScheduledEvent) -> None:
-        guild = getattr(event, "guild", None)
-        if guild is None or not self._is_target_guild(guild.id):
-            return
-
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
-        creator_text = await self._scheduled_event_creator_text(event)
-
-        entry = await self._find_recent_scheduled_event_audit_entry(
-            guild,
-            event_id=event.id,
-            action=discord.AuditLogAction.scheduled_event_create,
-        )
-        if entry is not None and entry.user is not None:
-            actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
-
-        body = self._truncate(
-            "\n".join(
-                [
-                    f"Name {self.ARROW} `{event.name}`",
-                    f"ID {self.ARROW} `{event.id}`",
-                    f"Status {self.ARROW} `{getattr(event, 'status', 'Unknown')}`",
-                    f"Start {self.ARROW} {self._fmt_dt(getattr(event, 'start_time', None), 'f')}",
-                    f"End {self.ARROW} {self._fmt_dt(getattr(event, 'end_time', None), 'f')}",
-                    f"Location {self.ARROW} {self._scheduled_event_location_text(event)}",
-                    f"Creator {self.ARROW} {creator_text}",
-                    f"Description {self.ARROW} `{getattr(event, 'description', None) or 'None'}`",
-                ]
-            ),
-            limit=1500,
-        )
-
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
-
-        view = DesignerView(
-            Container(
-                TextDisplay("## Scheduled Event Created"),
-                TextDisplay(body),
-                discord.ui.Separator(
-                    divider=True,
-                    spacing=discord.SeparatorSpacingSize.small,
-                ),
-                TextDisplay(self._truncate("\n".join(footer_lines), limit=300)),
-                color=self._color("scheduled_event_create"),
-            )
-        )
-        await self._send_view(view=view)
-
-    @commands.Cog.listener()
-    async def on_scheduled_event_delete(self, event: discord.ScheduledEvent) -> None:
-        guild = getattr(event, "guild", None)
-        if guild is None or not self._is_target_guild(guild.id):
-            return
-
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
-
-        entry = await self._find_recent_scheduled_event_audit_entry(
-            guild,
-            event_id=event.id,
-            action=discord.AuditLogAction.scheduled_event_delete,
-        )
-        if entry is not None and entry.user is not None:
-            actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
-
-        body = self._truncate(
-            "\n".join(
-                [
-                    f"Name {self.ARROW} `{event.name}`",
-                    f"ID {self.ARROW} `{event.id}`",
-                    f"Status {self.ARROW} `{getattr(event, 'status', 'Unknown')}`",
-                    f"Start {self.ARROW} {self._fmt_dt(getattr(event, 'start_time', None), 'f')}",
-                    f"End {self.ARROW} {self._fmt_dt(getattr(event, 'end_time', None), 'f')}",
-                    f"Location {self.ARROW} {self._scheduled_event_location_text(event)}",
-                ]
-            ),
-            limit=1500,
-        )
-
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
-
-        view = DesignerView(
-            Container(
-                TextDisplay("## Scheduled Event Deleted"),
-                TextDisplay(body),
-                discord.ui.Separator(
-                    divider=True,
-                    spacing=discord.SeparatorSpacingSize.small,
-                ),
-                TextDisplay(self._truncate("\n".join(footer_lines), limit=300)),
-                color=self._color("scheduled_event_delete"),
-            )
-        )
-        await self._send_view(view=view)
-
-    @commands.Cog.listener()
-    async def on_scheduled_event_update(
-        self,
-        before: discord.ScheduledEvent,
-        after: discord.ScheduledEvent,
-    ) -> None:
-        guild = getattr(after, "guild", None)
-        if guild is None or not self._is_target_guild(guild.id):
-            return
-
-        changes: list[str] = []
-
-        if before.name != after.name:
-            changes.append(f"Name {self.ARROW} `{before.name}` → `{after.name}`")
-
-        if getattr(before, "description", None) != getattr(after, "description", None):
-            changes.append(
-                f"Description {self.ARROW} `{getattr(before, 'description', None) or 'None'}` → `{getattr(after, 'description', None) or 'None'}`"
-            )
-
-        if getattr(before, "status", None) != getattr(after, "status", None):
-            changes.append(
-                f"Status {self.ARROW} `{getattr(before, 'status', None)}` → `{getattr(after, 'status', None)}`"
-            )
-
-        if getattr(before, "start_time", None) != getattr(after, "start_time", None):
-            changes.append(
-                f"Start {self.ARROW} {self._fmt_dt(getattr(before, 'start_time', None), 'f')} → {self._fmt_dt(getattr(after, 'start_time', None), 'f')}"
-            )
-
-        if getattr(before, "end_time", None) != getattr(after, "end_time", None):
-            changes.append(
-                f"End {self.ARROW} {self._fmt_dt(getattr(before, 'end_time', None), 'f')} → {self._fmt_dt(getattr(after, 'end_time', None), 'f')}"
-            )
-
-        if self._scheduled_event_location_text(before) != self._scheduled_event_location_text(after):
-            changes.append(
-                f"Location {self.ARROW} {self._scheduled_event_location_text(before)} → {self._scheduled_event_location_text(after)}"
-            )
-
-        if not changes:
-            return
-
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
-
-        entry = await self._find_recent_scheduled_event_audit_entry(
-            guild,
-            event_id=after.id,
-            action=discord.AuditLogAction.scheduled_event_update,
-        )
-        if entry is not None and entry.user is not None:
-            actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
-
-        items: list[Any] = [
-            TextDisplay("## Scheduled Event Updated"),
-            TextDisplay(
-                self._truncate(
-                    "\n".join(
-                        [
-                            f"Name {self.ARROW} `{after.name}`",
-                            f"ID {self.ARROW} `{after.id}`",
-                        ]
-                    ),
-                    limit=800,
-                )
-            ),
-            TextDisplay(self._truncate("\n".join(changes), limit=1400)),
-            discord.ui.Separator(
-                divider=True,
-                spacing=discord.SeparatorSpacingSize.small,
-            ),
-        ]
-
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
-
-        items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=300)))
-
-        view = DesignerView(
-            Container(
-                *self._flatten_items(items),
-                color=self._color("scheduled_event_update"),
             )
         )
         await self._send_view(view=view)
@@ -2019,8 +2098,6 @@ class Logs(LogsHelper, commands.Cog):
 
             items.append(TextDisplay(self._truncate("\n".join(lines), limit=1200)))
 
-        actor_text = "-# **Moderator:** Unknown"
-        reason_text = None
         entry = None
 
         if created_ids:
@@ -2042,11 +2119,8 @@ class Logs(LogsHelper, commands.Cog):
                 actions=discord.AuditLogAction.sticker_update,
             )
 
-        if entry is not None and entry.user is not None:
-            actor = entry.user
-            actor_text = f"-# **Moderator:** {actor} • {actor.id}"
-            if entry.reason:
-                reason_text = f"-# Reason: {entry.reason}"
+        actor = entry.user if entry is not None else None
+        reason = entry.reason if entry is not None else None
 
         items.append(
             discord.ui.Separator(
@@ -2055,11 +2129,8 @@ class Logs(LogsHelper, commands.Cog):
             )
         )
 
-        footer_lines = [actor_text]
-        if reason_text:
-            footer_lines.append(reason_text)
-
-        items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=300)))
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=True)
+        items.append(TextDisplay(footer_text or "-# **Moderator:** Unknown"))
 
         view = DesignerView(
             Container(
@@ -2075,6 +2146,10 @@ class Logs(LogsHelper, commands.Cog):
         if guild is None or not self._is_target_guild(guild.id):
             return
 
+        entry = await self._find_recent_webhook_audit_entry(channel)
+        actor = entry.user if entry is not None else None
+        reason = entry.reason if entry is not None else None
+
         body = self._truncate(
             "\n".join(
                 [
@@ -2086,10 +2161,24 @@ class Logs(LogsHelper, commands.Cog):
             limit=1200,
         )
 
+        items: list[Any] = [
+            TextDisplay("## Webhooks Updated"),
+            TextDisplay(body),
+        ]
+
+        footer_text = self._moderator_footer_text(actor=actor, reason=reason, unknown=False)
+        if footer_text:
+            items.append(
+                discord.ui.Separator(
+                    divider=True,
+                    spacing=discord.SeparatorSpacingSize.small,
+                )
+            )
+            items.append(TextDisplay(footer_text))
+
         view = DesignerView(
             Container(
-                TextDisplay("## Webhooks Updated"),
-                TextDisplay(body),
+                *self._flatten_items(items),
                 color=self._color("webhook_update"),
             )
         )
