@@ -512,7 +512,13 @@ class User(commands.Cog):
         flags = []
         if profile and getattr(profile, "public_flags", None):
             with contextlib.suppress(Exception):
-                flags = [flag.name.replace("_", " ").title() for flag in profile.public_flags.all()]
+                for flag in profile.public_flags.all():
+                    flag_name = getattr(flag, "name", None)
+
+                    if flag_name is None:
+                        flag_name = str(flag).split(".")[-1]
+
+                    flags.append(str(flag_name).replace("_", " ").title())
 
         timeout_until = getattr(member, "timed_out_until", None)
         timeout_text = format_datetime(timeout_until) if timeout_until and timeout_until > now else "None"
