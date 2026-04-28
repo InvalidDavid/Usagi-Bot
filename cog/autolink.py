@@ -47,16 +47,16 @@ class Autolink(commands.Cog):
     def cache_stats(self) -> dict[str, Any]:
         now = time.monotonic()
 
+        for guild_id in list(self.processed_links_by_guild.keys()):
+            self._prune_guild_cache(guild_id, now)
+
         guild_count = len(self.processed_links_by_guild)
         entry_count = sum(len(cache) for cache in self.processed_links_by_guild.values())
 
-        expired_count = 0
         biggest_guild_id = None
         biggest_guild_entries = 0
 
         for guild_id, cache in self.processed_links_by_guild.items():
-            expired_count += sum(1 for expires_at in cache.values() if expires_at <= now)
-
             if len(cache) > biggest_guild_entries:
                 biggest_guild_id = guild_id
                 biggest_guild_entries = len(cache)
@@ -65,7 +65,7 @@ class Autolink(commands.Cog):
             "type": "internal",
             "guilds": guild_count,
             "entries": entry_count,
-            "expired_pending_cleanup": expired_count,
+            "expired_pending_cleanup": 0,
             "locks": len(self.guild_locks),
             "ttl_seconds": self.CACHE_TTL_SECONDS,
             "max_per_guild": self.CACHE_SIZE_PER_GUILD,

@@ -95,31 +95,60 @@ class Logs(LogsHelper, commands.Cog):
         self._message_attachment_cache: dict[int, dict[str, Any]] = {}
         self._message_attachment_cache_bytes = 0
 
+        self._attachment_cache_tasks: dict[int, asyncio.Task] = {}
+
+        self._create_task(self._maintenance_loop(), name="logs:maintenance")
+
     def cache_stats(self) -> dict[str, Any]:
+        for guild_id in list(self._recent_audit_entries.keys()):
+            self._prune_recent_audit_entries(guild_id)
+
         recent_audit_entries = sum(
             len(entries)
-            for entries in getattr(self, "_recent_audit_entries", {}).values()
+            for entries in self._recent_audit_entries.values()
         )
+
+        self._prune_message_attachment_cache()
 
         return {
             "type": "event-state",
             "recent_bulk_log_keys": len(self._recent_bulk_log_keys),
             "pending_member_updates": len(self._pending_member_updates),
-            "member_update_tasks": len(self._member_update_tasks),
+            "member_update_tasks": sum(
+                1 for task in self._member_update_tasks.values()
+                if not task.done()
+            ),
             "recent_bans": len(self._recent_bans),
             "recent_user_update_keys": len(self._recent_user_update_keys),
-            "background_tasks": len(self._background_tasks),
+            "background_tasks": sum(
+                1 for task in self._background_tasks
+                if not task.done()
+            ),
+            "attachment_cache_tasks": sum(
+                1 for task in self._attachment_cache_tasks.values()
+                if not task.done()
+            ),
             "recent_audit_entries": recent_audit_entries,
-            "recent_audit_entry_ids": len(getattr(self, "_recent_audit_entry_ids", set())),
+            "recent_audit_entry_ids": len(self._recent_audit_entry_ids),
+            "message_attachment_cache_entries": len(self._message_attachment_cache),
+            "message_attachment_cache_bytes": self._message_attachment_cache_bytes,
+            "message_attachment_cache_mib": round(self._message_attachment_cache_bytes / 1024 / 1024, 2),
+            "message_attachment_cache_max_messages": NORMAL_DELETE_ATTACHMENT_CACHE_MAX_MESSAGES,
+            "message_attachment_cache_max_mib": round(NORMAL_DELETE_ATTACHMENT_CACHE_MAX_BYTES / 1024 / 1024, 2),
+            "message_attachment_cache_ttl_seconds": NORMAL_DELETE_ATTACHMENT_CACHE_TTL,
         }
 
     def cog_unload(self) -> None:
-        for task in self._background_tasks:
+        for task in list(self._background_tasks):
             task.cancel()
 
-        for task in self._member_update_tasks.values():
+        for task in list(self._member_update_tasks.values()):
             task.cancel()
 
+        for task in list(self._attachment_cache_tasks.values()):
+            task.cancel()
+
+        self._attachment_cache_tasks.clear()
         self._background_tasks.clear()
         self._member_update_tasks.clear()
         self._pending_member_updates.clear()
@@ -130,6 +159,8 @@ class Logs(LogsHelper, commands.Cog):
         self._recent_audit_entry_ids.clear()
         self._message_attachment_cache.clear()
         self._message_attachment_cache_bytes = 0
+
+
 
     def _create_task(
         self,
@@ -151,6 +182,16 @@ class Logs(LogsHelper, commands.Cog):
         exc = task.exception()
         if exc is not None:
             logger.exception("Unhandled task error in Logs cog.", exc_info=exc)
+
+    async def _maintenance_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(60)
+                self._prune_message_attachment_cache()
+                for guild_id in list(self._recent_audit_entries.keys()):
+                    self._prune_recent_audit_entries(guild_id)
+        except asyncio.CancelledError:
+            return
 
     @staticmethod
     def _safe_attachment_filename(message_id: int, index: int, filename: Optional[str]) -> str:
@@ -301,13 +342,14 @@ class Logs(LogsHelper, commands.Cog):
         actor: Optional[discord.abc.User],
         reason: Optional[str],
         unknown: bool = True,
+        label: str = "Moderator",
     ) -> Optional[str]:
         lines: list[str] = []
 
         if actor is not None:
-            lines.append(f"-# **Moderator:** {actor} • {actor.id}")
+            lines.append(f"-# **{label}:** {actor} • {actor.id}")
         elif unknown:
-            lines.append("-# **Moderator:** Unknown")
+            lines.append(f"-# **{label}:** Unknown")
 
         reason_line = self._reason_line(reason)
         if reason_line:
@@ -376,8 +418,15 @@ class Logs(LogsHelper, commands.Cog):
                 if target_id is not None and target_id != msg.author.id:
                     continue
 
+                actor = getattr(entry, "user", None)
+                if actor is None:
+                    continue
+
+                if getattr(actor, "id", None) == msg.author.id:
+                    return None, None
+
                 self._store_recent_audit_entry(entry)
-                return entry.user, entry.reason
+                return actor, entry.reason
 
         except discord.Forbidden:
             logger.warning("Missing View Audit Log permission while resolving single message delete actor.")
@@ -494,8 +543,11 @@ class Logs(LogsHelper, commands.Cog):
                 action=discord.AuditLogAction.member_update,
             )
             if entry is not None:
-                actor = entry.user
-                reason = entry.reason
+                entry_actor = entry.user
+
+                if entry_actor is not None and getattr(entry_actor, "id", None) != after.id:
+                    actor = entry_actor
+                    reason = entry.reason
 
         if actor is None and roles_changed:
             role_action = getattr(discord.AuditLogAction, "member_role_update", None)
@@ -507,8 +559,11 @@ class Logs(LogsHelper, commands.Cog):
                     delay=0,
                 )
                 if entry is not None:
-                    actor = entry.user
-                    reason = entry.reason
+                    entry_actor = entry.user
+
+                    if entry_actor is not None and getattr(entry_actor, "id", None) != after.id:
+                        actor = entry_actor
+                        reason = entry.reason
 
         header_text = self._truncate(
             "\n".join(
@@ -1656,6 +1711,12 @@ class Logs(LogsHelper, commands.Cog):
 
         deleted_at = discord.utils.utcnow()
         moderator, delete_reason = await self._find_recent_message_delete_actor(msg)
+
+        cache_task = self._attachment_cache_tasks.get(msg.id)
+        if cache_task is not None and not cache_task.done():
+            with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, discord.HTTPException):
+                await asyncio.wait_for(asyncio.shield(cache_task), timeout=2.0)
+
         cached_files = self._consume_cached_message_attachment_files(msg.id)
 
         items: list[Any] = [
@@ -2202,6 +2263,51 @@ class Logs(LogsHelper, commands.Cog):
         )
         await self._send_view(view=view)
 
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.guild is None:
+            return
+
+        if message.author.bot:
+            return
+
+        if not message.attachments:
+            return
+
+        task = self._create_task(
+            self._cache_message_attachments(message),
+            name=f"logs:attachment_cache:{message.id}",
+        )
+
+        self._attachment_cache_tasks[message.id] = task
+        task.add_done_callback(
+            lambda done_task, message_id=message.id: self._attachment_cache_tasks.pop(message_id, None)
+        )
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+        if not self._is_target_guild(payload.guild_id):
+            return
+
+        # if msg is cached, overtaked normal on_message_delete
+        if payload.cached_message is not None:
+            return
+
+        channel_obj = await self._resolve_channel_obj(payload.channel_id)
+        channel_label = self._channel_name(channel_obj) if channel_obj else f"`{payload.channel_id}`"
+
+        view = DesignerView(
+            Container(
+                TextDisplay("## Message Deleted"),
+                TextDisplay(
+                    f"Message ID {self.ARROW} `{payload.message_id}`\n"
+                    f"Channel {self.ARROW} {channel_label}\n\n"
+                    f"-# Content unavailable because message was not cached."
+                ),
+                color=self._color("raw_message_delete"),
+            )
+        )
+        await self._send_view(view=view)
 
 def setup(bot: commands.Bot) -> None:
     bot.add_cog(Logs(bot))

@@ -78,6 +78,20 @@ def enum_name(value: object) -> str:
     name = getattr(value, "name", value)
     return safe_md(name).replace("_", " ").title()
 
+async def measure_rest_ping(bot) -> Optional[float]:
+    start = time.perf_counter()
+
+    try:
+        await bot.http.request(discord.http.Route("GET", "/gateway"))
+    except Exception:
+        logger.exception("Failed to measure Discord REST ping.")
+        return None
+
+    return round((time.perf_counter() - start) * 1000, 2)
+
+
+def format_ms(value: Optional[float]) -> str:
+    return f"{value:.2f} ms" if isinstance(value, (int, float)) else "Error"
 
 def bytes_to_mib(value: Optional[int]) -> str:
     return f"{value / 1024 / 1024:.0f} MiB" if isinstance(value, int) and value > 0 else "N/A"
@@ -764,11 +778,13 @@ class User(commands.Cog):
 
     @slash_command(name="about", description="Detailed stats about the bot.")
     async def about(self, ctx: discord.ApplicationContext):
+        command_start = time.perf_counter()
         await ctx.defer()
+
+        defer_done = time.perf_counter()
 
         now = datetime.now(timezone.utc)
         uptime = now - self.start_time
-        command_start = time.perf_counter()
 
         created_at = self.bot.user.created_at if self.bot.user else None
         created_str = (
@@ -778,19 +794,10 @@ class User(commands.Cog):
         )
 
         ws_ping = round(self.bot.latency * 1000, 2)
-
-        api_start = time.perf_counter()
-        try:
-            await self.bot.http.request(discord.http.Route("GET", "/gateway"))
-            api_ping = round((time.perf_counter() - api_start) * 1000, 2)
-        except Exception:
-            api_ping = None
-
-        cmd_latency = round((time.perf_counter() - command_start) * 1000, 2)
+        api_ping = await measure_rest_ping(self.bot)
 
         embed = discord.Embed(
             title="🤖 Bot-Infos",
-            description=f"# [Support / GitHub]({SUPPORT_SERVER})",
             color=discord.Color.blurple(),
             timestamp=now,
         )
@@ -823,21 +830,16 @@ class User(commands.Cog):
         )
         embed.add_field(
             name="🏓 WebSocket Ping",
-            value=f"```{ws_ping} ms```",
+            value=f"```{format_ms(ws_ping)}```",
             inline=True,
         )
         embed.add_field(
-            name="📡 API Ping",
-            value=f"```{api_ping if api_ping is not None else 'Error'} ms```",
+            name="📡 REST API Ping",
+            value=f"```{format_ms(api_ping)}```",
             inline=True,
         )
         embed.add_field(
-            name="⚡ Command-Reaction Time",
-            value=f"```{cmd_latency} ms```",
-            inline=True,
-        )
-        embed.add_field(
-            name="🌍 Servers",
+            name="🌍 Guilds",
             value=f"```{len(getattr(self.bot, 'guilds', []))}```",
             inline=True,
         )
@@ -846,21 +848,17 @@ class User(commands.Cog):
             process = psutil.Process(os.getpid())
             ram = psutil.virtual_memory()
 
-            shard_count = getattr(self.bot, "shard_count", None)
-            shard_id = getattr(ctx.guild, "shard_id", None) if ctx.guild else None
-
-            cache_stats = None
-            if hasattr(self.bot, "cache_stats"):
-                cache_stats = await self.bot.cache_stats()
+            system_cpu = psutil.cpu_percent(interval=0.1)
+            process_cpu = process.cpu_percent(interval=0.1)
 
             embed.add_field(
                 name="💻 System CPU",
-                value=f"```{psutil.cpu_percent(interval=0.1):.1f}%```",
+                value=f"```{system_cpu:.1f}%```",
                 inline=True,
             )
             embed.add_field(
                 name="⚙️ Process CPU",
-                value=f"```{process.cpu_percent(interval=0.1):.1f}%```",
+                value=f"```{process_cpu:.1f}%```",
                 inline=True,
             )
             embed.add_field(
@@ -903,21 +901,26 @@ class User(commands.Cog):
                 value=f"```{discord.__version__}```",
                 inline=True,
             )
-            embed.add_field(
-                name="🧩 Shard",
-                value=(
-                    f"```ID: {shard_id if shard_id is not None else 'N/A'} / "
-                    f"Count: {shard_count if shard_count is not None else 'N/A'}```"
-                ),
-                inline=False,
-            )
+
+        before_send = time.perf_counter()
+
+        embed.add_field(
+            name="⚡ Command Timing",
+            value=(
+                f"```"
+                f"Defer:   {round((defer_done - command_start) * 1000, 2)} ms\n"
+                f"Handler: {round((before_send - command_start) * 1000, 2)} ms"
+                f"```"
+            ),
+            inline=False,
+        )
 
         embed.set_footer(
             text=f"Requested by {ctx.author}",
             icon_url=ctx.author.display_avatar.url,
         )
 
-        await ctx.respond(embed=embed, view=AboutView())
+        await ctx.followup.send(embed=embed, view=AboutView())
 
     @slash_command(name="userinfo", description="Show compact information about a server member.")
     @commands.guild_only()
@@ -973,6 +976,56 @@ class User(commands.Cog):
 
         with contextlib.suppress(discord.HTTPException, discord.NotFound, AttributeError):
             view.message = await msg.original_response()
+
+    @slash_command(name="ping", description="Show bot latency.")
+    async def ping(self, ctx: discord.ApplicationContext):
+        command_start = time.perf_counter()
+        await ctx.defer()
+
+        defer_done = time.perf_counter()
+
+        now = datetime.now(timezone.utc)
+
+        ws_ping = round(self.bot.latency * 1000, 2)
+        api_ping = await measure_rest_ping(self.bot)
+
+        before_send = time.perf_counter()
+
+        embed = discord.Embed(
+            title="🏓 Pong",
+            color=discord.Color.blurple(),
+            timestamp=now,
+        )
+
+        embed.add_field(
+            name="WebSocket",
+            value=f"```{format_ms(ws_ping)}```",
+            inline=True,
+        )
+
+        embed.add_field(
+            name="REST API",
+            value=f"```{format_ms(api_ping)}```",
+            inline=True,
+        )
+
+        embed.add_field(
+            name="Command Timing",
+            value=(
+                f"```"
+                f"Defer:   {round((defer_done - command_start) * 1000, 2)} ms\n"
+                f"Handler: {round((before_send - command_start) * 1000, 2)} ms"
+                f"```"
+            ),
+            inline=False,
+        )
+
+        embed.set_footer(
+            text=f"Requested by {ctx.author}",
+            icon_url=ctx.author.display_avatar.url,
+        )
+
+        await ctx.followup.send(embed=embed)
 
 def setup(bot):
     bot.add_cog(User(bot))
