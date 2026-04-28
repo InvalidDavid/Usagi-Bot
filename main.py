@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from utils.imports import *
 from utils.secrets import OWNER, TOKEN
+import inspect
 
 # ---------------- PATHS ----------------
 # automatically creates folders on bot start
@@ -448,12 +449,54 @@ def build_bot() -> tuple[UsagiBot, Callable[[], Awaitable[None]]]:
         logger.info("%s: Synced from %s (%s)", datetime.now(), ctx.author, ctx.author.id)
         await ctx.reply("Slash commands are now synced. Wait a few seconds before using them.")
 
+    async def _maybe_await(value: Any) -> Any:
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    async def _clear_runtime_caches(bot: commands.Bot) -> dict[str, Any]:
+        results: dict[str, Any] = {}
+
+        # GlobalCache
+        if hasattr(bot, "cache_clear") and callable(bot.cache_clear):
+            try:
+                results["GlobalCache"] = await _maybe_await(bot.cache_clear())
+            except Exception as exc:
+                logger.exception("Failed to clear GlobalCache")
+                results["GlobalCache"] = f"ERROR: {type(exc).__name__}"
+
+        # Cog caches
+        for cog_name, cog in bot.cogs.items():
+            clear_method = getattr(cog, "cache_clear", None)
+
+            if callable(clear_method):
+                try:
+                    results[cog_name] = await _maybe_await(clear_method())
+                except Exception as exc:
+                    logger.exception("Failed to clear cache for cog %s", cog_name)
+                    results[cog_name] = f"ERROR: {type(exc).__name__}"
+                continue
+
+        return results
+
     @bot.command(name="cacheclear", hidden=True)
     @commands.is_owner()
     async def cacheclear(ctx: commands.Context) -> None:
-        cleared = await bot.cache_clear()
-        logger.info("Manual cache clear executed by %s (%s) | cleared %s", ctx.author, ctx.author.id, cleared)
-        await ctx.reply(f"Cleared {cleared} cache entr{'y' if cleared == 1 else 'ies'}.")
+        results = await _clear_runtime_caches(bot)
+
+        logger.info(
+            "Manual full cache clear executed by %s (%s) | results=%s",
+            ctx.author,
+            ctx.author.id,
+            results,
+        )
+
+        lines = ["[CacheClear]"]
+
+        for name, result in results.items():
+            lines.append(f"{name}={result}")
+
+        await ctx.reply("```ini\n" + "\n".join(lines)[:1800] + "\n```")
 
     @bot.command(name="cachestats", hidden=True)
     @commands.is_owner()
