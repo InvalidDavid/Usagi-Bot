@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from utils.imports import *
-from utils.secrets import OWNER, TOKEN
+from utils.secrets import OWNER, TOKEN, GUILDS_ID
 import inspect
 
 # ---------------- PATHS ----------------
@@ -355,11 +355,13 @@ class UsagiBot(commands.Bot):
 
 def build_bot() -> tuple[UsagiBot, Callable[[], Awaitable[None]]]:
     bot = UsagiBot(
+        auto_sync_commands=True,
         intents=discord.Intents.all(),
         sync_commands=True,
         owner_ids=OWNER,
         command_prefix="=",
         help_command=None,
+        debug_guilds=GUILDS_ID,
     )
 
     bot.global_cache = GlobalCache(logger_=logging.getLogger("bot.cache"))
