@@ -746,9 +746,17 @@ class LogsMsgHelper:
             discord.ui.File(f"attachment://{file_to_send.filename}"),
         ]
 
-        footer_text = self._moderator_footer_text(actor=moderator, reason=reason, unknown=True)
-        if footer_text:
-            items.append(TextDisplay(footer_text))
+        footer_lines: list[str] = []
+
+        if moderator is not None:
+            footer_lines.append(f"-# **Moderator:** {moderator} • {moderator.id}")
+
+        reason_line = self._reason_line(reason)
+        if reason_line:
+            footer_lines.append(reason_line)
+
+        if footer_lines:
+            items.append(TextDisplay(self._truncate("\n".join(footer_lines), limit=350)))
 
         return DesignerView(
             Container(
