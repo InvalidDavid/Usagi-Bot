@@ -140,8 +140,7 @@ class ModC(commands.Cog):
         if not isinstance(thread.parent, discord.ForumChannel):
             return
 
-        THREADID = 1488486275898933288
-        if thread.parent.id != THREADID:
+        if thread.parent.id != 1488486275898933288:
             return
 
         pin_notice = None
@@ -196,10 +195,10 @@ class ModC(commands.Cog):
             title="Support Channel",
             description=(
                 "Rules for asking for support:\n"
-                "1. - <#1484655685542350990>"
-                "2. - <#1488492402623905913>."
+                "1. - <#1484655685542350990>\n"
+                "2. - <#1488492402623905913>.\n"
             ),
-            color=discord.Color.blurple()
+            color=discord.Color.red()
         )
         embed.set_footer(text="You can use /close to close your post.")
 
@@ -361,15 +360,15 @@ class ModC(commands.Cog):
         new_name = self._strip_lock_prefix(thread.name)
         new_name = f"🔒 {new_name}"
 
+        await ctx.respond(f"Closing thread `{thread.name}`", ephemeral=True)
+
         try:
-            await thread.send("Thread has been locked 🔒")
             await thread.edit(
                 archived=True,
                 locked=True,
                 name=new_name,
                 reason=f"Thread closed by moderator {ctx.author} ({ctx.author.id})",
             )
-            await ctx.respond(f"Closing thread `{thread.name}`", ephemeral=True)
         except discord.Forbidden:
             await ctx.respond("I don't have permission to close this thread.", ephemeral=True)
         except discord.HTTPException:
