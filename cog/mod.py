@@ -218,7 +218,7 @@ class ModC(commands.Cog):
     #         except discord.HTTPException:
     #             await asyncio.sleep(1 + attempt)
 
-    @mod.command(name="purge", description="Clear messages")
+    @mod.command(name="purge", description="Clear messages with filters")
     @commands.guild_only()
     @commands.cooldown(1, 10, commands.BucketType.user)
     @commands.has_permissions(manage_messages=True)
@@ -226,45 +226,161 @@ class ModC(commands.Cog):
     async def purge(
             self,
             ctx: discord.ApplicationContext,
-            amount: Option(int, "Amount of messages to delete", min_value=1, max_value=100),
+            amount: Option(int, "Amount of recent messages to scan", min_value=1, max_value=300),
+            member: Option(discord.Member, "Only delete messages from this member", required=False) = None,
+            bots_only: Option(bool, "Only delete bot messages", required=False, default=False) = False,
+            contains: Option(str, "Only delete messages containing this text", required=False) = None,
+            attachments_only: Option(bool, "Only delete messages with attachments", required=False,
+                                     default=False) = False,
+            include_pinned: Option(bool, "Also delete pinned messages", required=False, default=False) = False,
+            reason: Option(str, "Optional audit-log reason", required=False) = None,
     ):
         await ctx.defer(ephemeral=True)
 
         channel = ctx.channel
         if not isinstance(channel, discord.TextChannel):
-            await ctx.followup.send("This command can only be used in text channels.", ephemeral=True)
+            await ctx.followup.send(
+                "This command can only be used in text channels.",
+                ephemeral=True,
+            )
             return
 
-        audit_reason = f"Purge by {ctx.author} ({ctx.author.id})"
+        contains_clean = contains.strip().lower() if contains else None
+        reason_clean = reason.strip() if reason else None
 
-        deleted = await channel.purge(
-            limit=amount,
-            check=lambda msg: not msg.pinned,
-            bulk=True,
-            reason=audit_reason,
-        )
+        if contains_clean and len(contains_clean) < 2:
+            await ctx.followup.send(
+                "The `contains` filter must be at least 2 characters long.",
+                ephemeral=True,
+            )
+            return
+
+        if reason_clean and len(reason_clean) > 400:
+            await ctx.followup.send(
+                "The audit-log reason is too long. Keep it under 400 characters.",
+                ephemeral=True,
+            )
+            return
+
+        def should_delete(msg: discord.Message) -> bool:
+            if not include_pinned and msg.pinned:
+                return False
+
+            if member is not None and msg.author.id != member.id:
+                return False
+
+            if bots_only and not msg.author.bot:
+                return False
+
+            if attachments_only and not msg.attachments:
+                return False
+
+            if contains_clean and contains_clean not in (msg.content or "").lower():
+                return False
+
+            return True
+
+        audit_reason_parts = [
+            f"Purge by {ctx.author} ({ctx.author.id})",
+            f"scan={amount}",
+        ]
+
+        if member is not None:
+            audit_reason_parts.append(f"member={member} ({member.id})")
+
+        if bots_only:
+            audit_reason_parts.append("bots_only=true")
+
+        if attachments_only:
+            audit_reason_parts.append("attachments_only=true")
+
+        if contains_clean:
+            audit_reason_parts.append(f"contains={contains_clean[:80]!r}")
+
+        if include_pinned:
+            audit_reason_parts.append("include_pinned=true")
+
+        if reason_clean:
+            audit_reason_parts.append(f"reason={reason_clean}")
+
+        audit_reason = " | ".join(audit_reason_parts)
+        audit_reason = audit_reason[:512]
+
+        try:
+            deleted = await channel.purge(
+                limit=amount,
+                check=should_delete,
+                bulk=True,
+                reason=audit_reason,
+            )
+
+        except discord.Forbidden:
+            await ctx.followup.send(
+                "I don't have permission to delete messages here.",
+                ephemeral=True,
+            )
+            return
+
+        except discord.HTTPException as exc:
+            logger.warning(
+                "Purge failed in channel %s by %s (%s): %r",
+                getattr(channel, "id", None),
+                ctx.author,
+                ctx.author.id,
+                exc,
+            )
+            await ctx.followup.send(
+                "Discord rejected the purge request. Try a smaller amount or narrower filters.",
+                ephemeral=True,
+            )
+            return
 
         if not deleted:
-            await ctx.followup.send("No eligible messages found to delete.", ephemeral=True)
+            await ctx.followup.send(
+                "No matching messages found.",
+                ephemeral=True,
+                delete_after=10,
+            )
             return
 
         authors = {msg.author.id for msg in deleted}
         bot_count = sum(1 for msg in deleted if msg.author.bot)
         user_count = len(deleted) - bot_count
+        attachment_count = sum(len(msg.attachments) for msg in deleted)
 
         oldest_dt = min(msg.created_at for msg in deleted).astimezone(timezone.utc)
         newest_dt = max(msg.created_at for msg in deleted).astimezone(timezone.utc)
 
+        filter_lines: list[str] = []
+
+        if member is not None:
+            filter_lines.append(f"- Member: {member.mention} (`{member.id}`)")
+
+        if bots_only:
+            filter_lines.append("- Bots only: `Yes`")
+
+        if contains_clean:
+            filter_lines.append(f"- Contains: `{discord.utils.escape_markdown(contains_clean[:80])}`")
+
+        if attachments_only:
+            filter_lines.append("- Attachments only: `Yes`")
+
+        filter_lines.append(f"- Included pinned: `{'Yes' if include_pinned else 'No'}`")
+
         await ctx.followup.send(
             (
-                f"🧹 **Purge completed**\n"
-                f"- Deleted: `{len(deleted)}` messages\n"
-                f"- Unique authors: `{len(authors)}`\n"
-                f"- Users: `{user_count}` | Bots: `{bot_count}`\n"
-                f"- Time range: <t:{int(oldest_dt.timestamp())}:F> → <t:{int(newest_dt.timestamp())}:F>"
+                    "🧹 **Purge completed**\n"
+                    f"- Deleted: `{len(deleted)}` messages\n"
+                    f"- Scanned: `{amount}` recent messages\n"
+                    f"- Unique authors: `{len(authors)}`\n"
+                    f"- Users: `{user_count}` | Bots: `{bot_count}`\n"
+                    f"- Attachments removed from logs/messages: `{attachment_count}`\n"
+                    f"- Time range: <t:{int(oldest_dt.timestamp())}:F> → <t:{int(newest_dt.timestamp())}:F>\n\n"
+                    "**Filters**\n"
+                    + "\n".join(filter_lines)
             ),
             ephemeral=True,
-            delete_after=10,
+            delete_after=20,
         )
 
     @forum.command(description="Change a thread's tag")
