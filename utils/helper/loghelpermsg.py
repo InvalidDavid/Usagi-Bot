@@ -1072,6 +1072,21 @@ class LogsMsgHelper:
                 )
             )
 
+            gallery = self._media_gallery(
+                attachments=getattr(msg, "attachments", []),
+                stickers=getattr(msg, "stickers", []),
+            )
+
+            if gallery is not None:
+                items.append(TextDisplay("**Preview**"))
+                items.append(gallery)
+                items.append(
+                    discord.ui.Separator(
+                        divider=True,
+                        spacing=discord.SeparatorSpacingSize.small,
+                    )
+                )
+
         elif msg.attachments:
             items.append(
                 TextDisplay(
@@ -1092,6 +1107,8 @@ class LogsMsgHelper:
                     spacing=discord.SeparatorSpacingSize.small,
                 )
             )
+
+
 
         footer_lines = [
             f"-# Message ID: {message_id} • Flags: {self._message_flags(msg)}",

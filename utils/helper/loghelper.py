@@ -146,6 +146,27 @@ class LogsHelper:
         return flat
 
     @staticmethod
+    def _media_gallery(
+            *,
+            attachments: Iterable[discord.Attachment] = (),
+            stickers: Iterable[Any] = (),
+    ) -> Optional[MediaGallery]:
+        items: list[Any] = []
+
+        for attachment in attachments:
+            if (getattr(attachment, "content_type", "") or "").startswith("image/"):
+                url = getattr(attachment, "proxy_url", None) or getattr(attachment, "url", None)
+                if url:
+                    items.append(discord.MediaGalleryItem(url=url))
+
+        for sticker in stickers:
+            url = getattr(sticker, "url", None) or getattr(getattr(sticker, "asset", None), "url", None)
+            if url:
+                items.append(discord.MediaGalleryItem(url=str(url)))
+
+        return MediaGallery(*items) if items else None
+
+    @staticmethod
     def _sticker_preview_gallery(stickers: Iterable[Any]) -> Optional[MediaGallery]:
         items: list[Any] = []
 
